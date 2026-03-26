@@ -8,26 +8,28 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"ebpf-mcp/internal/audit"
 	"ebpf-mcp/internal/server"
+	"ebpf-mcp/internal/tool"
 )
 
 type customizeSvc struct{}
 
 type observeSvc struct{}
 
-func (customizeSvc) Customize(context.Context, server.CustomizeRequest) (server.CustomizeResult, error) {
-	return server.CustomizeResult{Accepted: true, NewState: "loaded"}, nil
+func (customizeSvc) Customize(context.Context, tool.CustomizeRequest) (tool.CustomizeResult, error) {
+	return tool.CustomizeResult{Accepted: true, NewState: "loaded"}, nil
 }
 
-func (observeSvc) Control(context.Context, server.ObserveRequest) (server.ObserveResult, error) {
-	return server.ObserveResult{State: "loaded", Admission: "allowed"}, nil
+func (observeSvc) Control(context.Context, tool.ObserveRequest) (tool.ObserveResult, error) {
+	return tool.ObserveResult{State: "loaded", Admission: "allowed"}, nil
 }
 
 func TestHTTPProtocolFlow(t *testing.T) {
 	s, err := server.New(server.ServerConfig{Transport: server.TransportHTTP, HTTPPort: "8080", AuthToken: "t1"}, server.Dependencies{
 		Customize: customizeSvc{},
 		Observe:   observeSvc{},
-		Audit:     server.NoopAuditLogger{},
+		Audit:     audit.NoopLogger{},
 	})
 	if err != nil {
 		t.Fatalf("new server: %v", err)

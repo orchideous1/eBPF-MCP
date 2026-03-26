@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -22,104 +23,50 @@ func main() {
 	var port string
 	var token string
 	var debug bool
-	var allowLoad bool
-	var loaderSocket string
 
 	flag.StringVar(&transport, "transport", server.TransportStdio, "transport type: stdio or http")
 	flag.StringVar(&port, "port", "8080", "http port")
 	flag.StringVar(&token, "token", "", "bearer token for http transport")
 	flag.BoolVar(&debug, "debug", false, "enable debug mode")
-	flag.BoolVar(&allowLoad, "allow-load", true, "allow probe load operation")
-	flag.StringVar(&loaderSocket, "loader-socket", "", "unix socket path for privileged loader executor")
 	flag.Parse()
 
 	if token == "" {
 		token = os.Getenv("MCP_AUTH_TOKEN")
 	}
-	if loaderSocket == "" {
-		loaderSocket = os.Getenv("EBPF_MCP_LOADER_SOCKET")
-	}
-	if envAllow := os.Getenv("EBPF_MCP_ALLOW_PROBE_LOAD"); envAllow != "" {
-		parsed, err := strconv.ParseBool(envAllow)
-		if err != nil {
-			log.Fatalf("invalid EBPF_MCP_ALLOW_PROBE_LOAD: %v", err)
-		}
-		allowLoad = parsed
-	}
-
 	dbPath := os.Getenv("EBPF_MCP_DUCKDB_PATH")
 	if dbPath == "" {
 		dbPath = "database/ebpf-mcp.duckdb"
 	}
 
-	loadAuthorizer := server.ToggleLoadAuthorizer{Allow: allowLoad}
-
-	var (
-		observeSvc   server.ObserveService
-		customizeSvc server.CustomizeService
-		shutdownFn   func()
-	)
-
-	if loaderSocket != "" {
-		rpcExecutor, err := server.NewRPCObserveExecutor(loaderSocket)
-		if err != nil {
-			log.Fatalf("failed to create rpc observe executor: %v", err)
-		}
-		probeServices, err := server.NewProbeServicesWithExecutor(rpcExecutor, loadAuthorizer)
-		if err != nil {
-			log.Fatalf("failed to create probe services: %v", err)
-		}
-		observeSvc = probeServices
-		customizeSvc = server.DisabledCustomizeService{Reason: "customization is disabled when using remote loader executor"}
-		shutdownFn = func() {}
-		log.Printf("using remote loader executor over unix socket: %s", loaderSocket)
-	} else {
-		db, err := openDuckDB(dbPath)
-		if err != nil {
-			log.Fatalf("failed to open duckdb: %v", err)
-		}
-
-		controller, err := probes.NewController(db)
-		if err != nil {
-			_ = db.Close()
-			log.Fatalf("failed to create probe controller: %v", err)
-		}
-
-		probeServices, err := server.NewProbeServicesWithExecutorAndCustomizer(
-			server.NewControllerObserveExecutor(controller),
-			server.NewControllerProbeCustomizer(controller),
-			loadAuthorizer,
-		)
-		if err != nil {
-			_ = controller.Shutdown()
-			_ = db.Close()
-			log.Fatalf("failed to create probe services: %v", err)
-		}
-		observeSvc = probeServices
-		customizeSvc = probeServices
-		shutdownFn = func() {
-			if err := controller.Shutdown(); err != nil {
-				log.Printf("failed to shutdown probes cleanly: %v", err)
-			}
-			_ = db.Close()
-		}
+	dbPath, err := resolveDuckDBPath(dbPath)
+	if err != nil {
+		log.Fatalf("failed to resolve duckdb path: %v", err)
 	}
-	defer shutdownFn()
+
+	db, err := openDuckDB(dbPath)
+	if err != nil {
+		log.Fatalf("failed to open duckdb: %v", err)
+	}
+	defer db.Close()
+
+	controller, err := probes.NewController(db)
+	if err != nil {
+		log.Fatalf("failed to create probe controller: %v", err)
+	}
+	defer func() {
+		if err := controller.Shutdown(); err != nil {
+			log.Printf("failed to shutdown probes cleanly: %v", err)
+		}
+	}()
 
 	cfg := server.ServerConfig{
-		Transport:        transport,
-		HTTPPort:         port,
-		AuthToken:        token,
-		Debug:            debug,
-		AllowProbeLoad:   allowLoad,
-		LoaderSocketPath: loaderSocket,
+		Transport: transport,
+		HTTPPort:  port,
+		AuthToken: token,
+		Debug:     debug,
 	}
 
-	s, err := server.New(cfg, server.Dependencies{
-		Customize: customizeSvc,
-		Observe:   observeSvc,
-		Audit:     server.NoopAuditLogger{},
-	})
+	s, err := server.New(cfg, controller)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
 	}
@@ -148,6 +95,73 @@ func openDuckDB(dbPath string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureDuckDBOwnership(dbPath); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
 	return db, nil
+}
+
+func ensureDuckDBOwnership(dbPath string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+
+	owner := os.Getenv("SUDO_USER")
+	if owner == "" {
+		owner = "shasha"
+	}
+
+	u, err := user.Lookup(owner)
+	if err != nil {
+		return err
+	}
+
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return err
+	}
+
+	if err := os.Chown(dbPath, uid, gid); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func resolveDuckDBPath(dbPath string) (string, error) {
+	if filepath.IsAbs(dbPath) {
+		return dbPath, nil
+	}
+
+	repoRoot, err := findRepoRoot()
+	if err == nil {
+		return filepath.Join(repoRoot, dbPath), nil
+	}
+
+	return filepath.Abs(dbPath)
+}
+
+func findRepoRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for {
+		if _, statErr := os.Stat(filepath.Join(wd, "go.mod")); statErr == nil {
+			return wd, nil
+		}
+
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return "", os.ErrNotExist
+		}
+		wd = parent
+	}
 }

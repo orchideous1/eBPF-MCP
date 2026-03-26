@@ -15,7 +15,7 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/duckdb/duckdb-go/v2"
 
-	"ebpf-mcp/database"
+	"ebpf-mcp/internal/db"
 	"ebpf-mcp/internal/probes"
 )
 

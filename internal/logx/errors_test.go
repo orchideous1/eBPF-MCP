@@ -1,4 +1,4 @@
-package server
+package logx
 
 import (
 	"errors"
@@ -22,7 +22,7 @@ func TestMapDomainError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapDomainError(tt.err)
+			got := MapDomainError(tt.err)
 			if got.Code != tt.want {
 				t.Fatalf("expected %s got %s", tt.want, got.Code)
 			}

@@ -14,8 +14,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"ebpf-mcp/internal/audit"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 	"ebpf-mcp/internal/server"
+	"ebpf-mcp/internal/tool"
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
@@ -75,7 +78,7 @@ func TestMCPObserveControlLoadFlow(t *testing.T) {
 		t.Fatalf("probe should be registered: %s", probeName)
 	}
 
-	probeServices, err := server.NewProbeServices(controller)
+	probeServices, err := tool.NewProbeServices(controller)
 	if err != nil {
 		t.Fatalf("new probe services: %v", err)
 	}
@@ -87,7 +90,7 @@ func TestMCPObserveControlLoadFlow(t *testing.T) {
 	}, server.Dependencies{
 		Customize: probeServices,
 		Observe:   probeServices,
-		Audit:     server.NoopAuditLogger{},
+		Audit:     audit.NoopLogger{},
 	})
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -106,7 +109,7 @@ func TestMCPObserveControlLoadFlow(t *testing.T) {
 		"probeName": probeName,
 		"operation": "restart",
 	})
-	if !strings.Contains(invalidBody, string(server.ErrorInvalidArgument)) {
+	if !strings.Contains(invalidBody, string(logx.ErrorInvalidArgument)) {
 		t.Fatalf("expected invalid argument in response, got: %s", invalidBody)
 	}
 

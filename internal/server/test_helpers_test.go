@@ -1,57 +1,50 @@
 package server
 
 import (
-	"context"
+	"database/sql"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"ebpf-mcp/internal/probes"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-type fakeCustomizeService struct {
-	result CustomizeResult
-	err    error
-	calls  int
-}
-
-func (f *fakeCustomizeService) Customize(context.Context, CustomizeRequest) (CustomizeResult, error) {
-	f.calls++
-	return f.result, f.err
-}
-
-type fakeObserveService struct {
-	result ObserveResult
-	err    error
-	calls  int
-}
-
-func (f *fakeObserveService) Control(context.Context, ObserveRequest) (ObserveResult, error) {
-	f.calls++
-	return f.result, f.err
-}
-
-type fakeAuditLogger struct {
-	events []AuditEvent
-}
-
-func (f *fakeAuditLogger) Record(_ context.Context, e AuditEvent) {
-	f.events = append(f.events, e)
-}
-
-func newTestServer(customize CustomizeService, observe ObserveService, audit AuditLogger) *Server {
-	if customize == nil {
-		customize = &fakeCustomizeService{}
-	}
-	if observe == nil {
-		observe = &fakeObserveService{}
-	}
-	if audit == nil {
-		audit = &fakeAuditLogger{}
-	}
-
-	s, err := New(ServerConfig{Transport: TransportStdio}, Dependencies{
-		Customize: customize,
-		Observe:   observe,
-		Audit:     audit,
-	})
+// openTestDB creates a temporary DuckDB database for testing.
+func openTestDB() (*sql.DB, error) {
+	dbPath := filepath.Join(os.TempDir(), "ebpf-mcp-test-*.duckdb")
+	f, err := os.CreateTemp("", filepath.Base(dbPath))
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+	f.Close()
+
+	db, err := sql.Open("duckdb", f.Name())
+	if err != nil {
+		os.Remove(f.Name())
+		return nil, err
+	}
+	return db, nil
+}
+
+// newTestServer creates a test server with a mock controller.
+func newTestServer(t *testing.T) *Server {
+	db, err := openTestDB()
+	if err != nil {
+		t.Fatalf("failed to open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	controller, err := probes.NewController(db)
+	if err != nil {
+		t.Fatalf("failed to create controller: %v", err)
+	}
+
+	s, err := New(ServerConfig{Transport: TransportStdio}, controller)
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
 	}
 	return s
 }

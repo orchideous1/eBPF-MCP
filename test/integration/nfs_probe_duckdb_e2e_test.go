@@ -20,7 +20,7 @@ import (
 
 func TestNFSProbeLoadAndDuckDBIngestionE2E(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("requires root privileges to load and attach eBPF programs")
+		t.Skipf("requires root privileges to load and attach eBPF programs (euid=%d). when switching from non-root to sudo, run with -count=1 or clean test cache", os.Geteuid())
 	}
 
 	if _, err := exec.LookPath("fio"); err != nil {
@@ -32,12 +32,26 @@ func TestNFSProbeLoadAndDuckDBIngestionE2E(t *testing.T) {
 		t.Skip("no NFS mount found in /proc/mounts")
 	}
 
-	dbPath := filepath.Join(t.TempDir(), "nfs-probe-e2e.duckdb")
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("find repo root: %v", err)
+	}
+
+	dbPath := filepath.Join(repoRoot, "database", "nfs-probe-e2e.duckdb")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("ensure database dir: %v", err)
+	}
+	if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("cleanup old duckdb file: %v", err)
+	}
+
 	db, err := sql.Open("duckdb", dbPath)
 	if err != nil {
 		t.Fatalf("open duckdb: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
 
 	controller, err := probes.NewController(db)
 	if err != nil {
@@ -89,9 +103,18 @@ func TestNFSProbeLoadAndDuckDBIngestionE2E(t *testing.T) {
 	if _, err := controller.Unload("nfs_file_read"); err != nil {
 		t.Fatalf("unload nfs_file_read probe: %v", err)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close duckdb before reopen: %v", err)
+	}
+
+	persistedDB, err := sql.Open("duckdb", dbPath)
+	if err != nil {
+		t.Fatalf("reopen persisted duckdb: %v", err)
+	}
+	defer persistedDB.Close()
 
 	var rowCount int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM nfs_file_read").Scan(&rowCount); err != nil {
+	if err := persistedDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM nfs_file_read").Scan(&rowCount); err != nil {
 		t.Fatalf("query nfs_file_read count: %v", err)
 	}
 
@@ -127,4 +150,23 @@ func findNFSMountPath() (string, bool) {
 	}
 
 	return "", false
+}
+
+func findRepoRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for {
+		if _, statErr := os.Stat(filepath.Join(wd, "go.mod")); statErr == nil {
+			return wd, nil
+		}
+
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return "", fmt.Errorf("go.mod not found from %s", wd)
+		}
+		wd = parent
+	}
 }
