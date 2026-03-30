@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// bearerAuthMiddleware creates a simple bearer token auth middleware (for testing).
 func bearerAuthMiddleware(expectedToken string, next http.Handler) http.Handler {
 	return bearerAuthMiddlewareWithLogger(expectedToken, next, nil, false)
 }

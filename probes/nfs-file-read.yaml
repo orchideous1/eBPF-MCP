@@ -1,0 +1,45 @@
+probes:
+  - type: nfs_file_read
+    title: 读文件
+    layer: nfs-client
+    level: L2
+    scene: 度量NFS-Client侧的文件单次读请求的延迟与大小
+    entrypoints:
+      - nfs_file_read
+    params:
+      - name: filter_pid
+        type: u32
+        description: 目标进程ID，用于过滤特定进程的NFS读写事件
+        optional: true
+        example: 1234
+      - name: filter_file
+        type: str
+        description: 目标文件名（支持通配符匹配），用于过滤特定文件的NFS读写事件
+        optional: true
+        example: "/data/*.log"
+      - name: filter_comm
+        type: str
+        description: 目标进程名（comm），用于过滤特定进程名称的NFS读写事件
+        optional: true
+        example: "nginx"
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 发起NFS读写请求的进程ID
+        - name: comm
+          type: str
+          description: 发起NFS读写请求的进程名称（最多16字符）
+        - name: time_stamp
+          type: u64
+          description: 事件发生的绝对时间戳（纳秒级，自系统启动以来的时间）
+        - name: lat
+          type: u64
+          description: NFS读写请求的延迟（纳秒），从请求发出到完成的时间
+        - name: size
+          type: u64
+          description: 读写的数据大小（字节）
+        - name: file
+          type: str
+          description: 被访问的文件路径（相对于NFS挂载点或绝对路径）
+    risks: 高并发 I/O 场景下全量追踪可能有开销，可采用filter_pid\filter_file\filter_comm进行进程追踪

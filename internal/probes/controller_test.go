@@ -12,6 +12,7 @@ import (
 var testProbeCounter uint64
 
 type stubProbe struct {
+	BaseProbe
 	name       string
 	startErr   error
 	stopErr    error
@@ -24,12 +25,22 @@ func (p *stubProbe) Name() string { return p.name }
 
 func (p *stubProbe) Start(context.Context, *sql.DB) error {
 	p.startCalls++
-	return p.startErr
+	if p.startErr != nil {
+		p.SetState(StateError, p.startErr.Error())
+		return p.startErr
+	}
+	p.SetState(StateLoaded)
+	return nil
 }
 
 func (p *stubProbe) Stop() error {
 	p.stopCalls++
-	return p.stopErr
+	if p.stopErr != nil {
+		p.SetState(StateError, p.stopErr.Error())
+		return p.stopErr
+	}
+	p.SetState(StateUnloaded)
+	return nil
 }
 
 func (p *stubProbe) Update(map[string]interface{}) error {

@@ -126,6 +126,9 @@ func (s *Server) registerTools() {
 	s.logger.Debugf("registering tool: system_observe_control")
 	s.mcpServer.AddTool(buildSystemObserveControlTool(), s.handleSystemObserveControl)
 
+	s.logger.Debugf("registering tool: probe_resource_info")
+	s.mcpServer.AddTool(buildProbeResourceInfoTool(), s.handleProbeResourceInfo)
+
 	s.logger.Debugf("tool registration completed")
 }
 
@@ -148,6 +151,15 @@ func buildSystemObserveControlTool() mcp.Tool {
 		mcp.WithDescription("Control probe lifecycle operations."),
 		mcp.WithString("probeName", mcp.Required()),
 		mcp.WithString("operation", mcp.Required(), mcp.Enum("load", "unload", "status")),
+	)
+}
+
+// buildProbeResourceInfoTool defines the probe_resource_info tool schema.
+func buildProbeResourceInfoTool() mcp.Tool {
+	return mcp.NewTool(
+		"probe_resource_info",
+		mcp.WithDescription("Get probe resource information including metadata and runtime status."),
+		mcp.WithString("probeName", mcp.Description("Specific probe ID to query. If empty, returns all probes.")),
 	)
 }
 
@@ -248,6 +260,41 @@ func (s *Server) handleSystemObserveControl(ctx context.Context, req mcp.CallToo
 	}
 
 	return newJSONResult(result)
+}
+
+// handleProbeResourceInfo handles probe resource information requests.
+func (s *Server) handleProbeResourceInfo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.logger.Debugf("tool call received: probe_resource_info")
+
+	args := req.GetArguments()
+	if args == nil {
+		args = make(map[string]any)
+	}
+
+	probeName, _ := args["probeName"].(string)
+
+	// 如果指定了具体的探针名称，返回单个探针信息
+	if probeName != "" {
+		s.logger.Debugf("probe_resource_info: querying single probe=%s", probeName)
+
+		info, err := s.controller.GetProbeInfo(probeName)
+		if err != nil {
+			mapped := logx.MapDomainError(err)
+			s.logger.LogToolError("probe_resource_info failed", mapped)
+			return mcp.NewToolResultError(mapped.String()), nil
+		}
+
+		return newJSONResult(info)
+	}
+
+	// 否则返回所有探针信息
+	s.logger.Debugf("probe_resource_info: querying all probes")
+
+	infos := s.controller.ListProbeInfos()
+	return newJSONResult(map[string]any{
+		"probes": infos,
+		"count":  len(infos),
+	})
 }
 
 // newJSONResult creates a tool result with JSON-encoded value.

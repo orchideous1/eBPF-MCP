@@ -1,3 +1,5 @@
+//go:generate go run ./cmd/probe-registry-gen
+
 package main
 
 import (
@@ -12,7 +14,8 @@ import (
 	"strconv"
 	"syscall"
 
-	_ "ebpf-mcp/ebpf/NFS-client"
+	// 自动导入所有探针包以触发 init() 注册
+	_ "ebpf-mcp/internal/probes/registry"
 	"ebpf-mcp/internal/probes"
 	"ebpf-mcp/internal/server"
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -41,6 +44,19 @@ func main() {
 	dbPath, err := resolveDuckDBPath(dbPath)
 	if err != nil {
 		log.Fatalf("failed to resolve duckdb path: %v", err)
+	}
+
+	// 加载探针静态元数据（从YAML配置文件）
+	// 这是探针的静态注册阶段，仅加载元数据到registry，不实例化探针
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		log.Printf("warning: failed to find repo root: %v", err)
+	} else {
+		if err := probes.LoadProbesFromYAML(repoRoot); err != nil {
+			log.Printf("warning: failed to load probe YAML configs: %v", err)
+		} else {
+			log.Printf("loaded probe metadata from YAML")
+		}
 	}
 
 	db, err := openDuckDB(dbPath)
