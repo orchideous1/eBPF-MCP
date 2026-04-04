@@ -1,7 +1,7 @@
 log/**
 .github/*
 .claude/**
-.vscdeo/
+.vscode/
 package/**
 exe/
 assets/
