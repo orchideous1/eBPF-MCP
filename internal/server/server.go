@@ -24,9 +24,6 @@ type Server struct {
 
 // New creates a protocol server and registers all tools.
 func New(cfg ServerConfig, controller *probes.Controller) (*Server, error) {
-	if cfg.Transport == "" {
-		cfg.Transport = TransportStdio
-	}
 	if cfg.HTTPPort == "" {
 		cfg.HTTPPort = "8080"
 	}

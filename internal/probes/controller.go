@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"sync"
-	"time"
 )
 
 var (
@@ -38,10 +36,8 @@ type Controller struct {
 }
 
 // NewController creates a controller bound to one shared database handle.
+// db can be nil if EnableLazyDB will be called later for on-demand database opening.
 func NewController(db *sql.DB) (*Controller, error) {
-	if db == nil {
-		return nil, fmt.Errorf("db is nil")
-	}
 	return &Controller{
 		db:       db,
 		probes:   make(map[string]Probe),
@@ -62,20 +58,6 @@ func (c *Controller) EnableLazyDB(dbPath string, dbOpener func(path string) (*sq
 func (c *Controller) openDBLocked() error {
 	if c.dbOpener == nil {
 		return fmt.Errorf("db opener not configured")
-	}
-
-	// 如果已有数据库文件存在，先重命名归档，避免前后两次数据相互污染
-	if _, err := os.Stat(c.dbPath); err == nil {
-		timestamp := time.Now().Format("20060102-150405")
-		archivePath := c.dbPath + "." + timestamp
-		if err := os.Rename(c.dbPath, archivePath); err != nil {
-			return fmt.Errorf("archive existing db: %w", err)
-		}
-		// 一并重命名可能存在的 WAL 文件
-		walPath := c.dbPath + ".wal"
-		if _, err := os.Stat(walPath); err == nil {
-			_ = os.Rename(walPath, archivePath+".wal")
-		}
 	}
 
 	db, err := c.dbOpener(c.dbPath)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -48,15 +49,31 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug mode")
 	flag.Parse()
 
-	dbPath := os.Getenv("EBPF_MCP_DUCKDB_PATH")
-	if dbPath == "" {
-		dbPath = "database/ebpf-mcp.duckdb"
+	// 获取数据库目录（环境变量或默认值）
+	dbDir := os.Getenv("EBPF_MCP_DUCKDB_DIR")
+	if dbDir == "" {
+		dbDir = "database"
 	}
 
-	dbPath, err := resolveDuckDBPath(dbPath)
-	if err != nil {
-		log.Fatalf("failed to resolve duckdb path: %v", err)
+	// 创建延迟处理的数据库 opener，每次打开时动态解析路径
+	dbOpener := func(_ string) (*sql.DB, error) {
+		return openDuckDB(dbDir)
 	}
+
+	// 创建 controller，使用懒加载模式（db 初始为 nil，在 Load 时自动打开）
+	controller, err := probes.NewController(nil)
+	if err != nil {
+		log.Fatalf("failed to create probe controller: %v", err)
+	}
+	controller.EnableLazyDB(dbDir, dbOpener)
+	defer func() {
+		log.Println("[main] shutting down controller...")
+		start := time.Now()
+		if err := controller.Shutdown(); err != nil {
+			log.Printf("[main] failed to shutdown probes cleanly: %v", err)
+		}
+		log.Printf("[main] controller shutdown took %v", time.Since(start))
+	}()
 
 	// 加载探针静态元数据（从YAML配置文件）
 	// 这是探针的静态注册阶段，仅加载元数据到registry，不实例化探针
@@ -70,25 +87,6 @@ func main() {
 			log.Printf("loaded probe metadata from YAML")
 		}
 	}
-
-	db, err := openDuckDB(dbPath)
-	if err != nil {
-		log.Fatalf("failed to open duckdb: %v", err)
-	}
-
-	controller, err := probes.NewController(db)
-	if err != nil {
-		log.Fatalf("failed to create probe controller: %v", err)
-	}
-	controller.EnableLazyDB(dbPath, openDuckDB)
-	defer func() {
-		log.Println("[main] shutting down controller...")
-		start := time.Now()
-		if err := controller.Shutdown(); err != nil {
-			log.Printf("[main] failed to shutdown probes cleanly: %v", err)
-		}
-		log.Printf("[main] controller shutdown took %v", time.Since(start))
-	}()
 
 	cfg := server.ServerConfig{
 		Transport: transport,
@@ -111,12 +109,17 @@ func main() {
 }
 
 
-func openDuckDB(dbPath string) (*sql.DB, error) {
+func openDuckDB(dbDir string) (*sql.DB, error) {
+	// 解析为绝对路径目录
+	dbPath, err := resolveDBPath(dbDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
+
+	// 确保目录存在
 	dir := filepath.Dir(dbPath)
-	if dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
-		}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("duckdb", dbPath)
@@ -133,6 +136,30 @@ func openDuckDB(dbPath string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// resolveDBPath 将数据库目录解析为完整的数据库文件路径（带时间戳命名）
+func resolveDBPath(dbDir string) (string, error) {
+	timestamp := time.Now().Format("20060102-150405")
+	dbFileName := fmt.Sprintf("ebpf-mcp.%s.duckdb", timestamp)
+
+	// 如果已经是绝对路径，直接拼接文件名
+	if filepath.IsAbs(dbDir) {
+		return filepath.Join(dbDir, dbFileName), nil
+	}
+
+	// 尝试相对于 repo root 解析
+	repoRoot, err := findRepoRoot()
+	if err == nil {
+		return filepath.Join(repoRoot, dbDir, dbFileName), nil
+	}
+
+	// 回退到当前工作目录
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(wd, dbDir, dbFileName), nil
 }
 
 func ensureDuckDBOwnership(dbPath string) error {
@@ -166,18 +193,6 @@ func ensureDuckDBOwnership(dbPath string) error {
 	return nil
 }
 
-func resolveDuckDBPath(dbPath string) (string, error) {
-	if filepath.IsAbs(dbPath) {
-		return dbPath, nil
-	}
-
-	repoRoot, err := findRepoRoot()
-	if err == nil {
-		return filepath.Join(repoRoot, dbPath), nil
-	}
-
-	return filepath.Abs(dbPath)
-}
 
 func findRepoRoot() (string, error) {
 	wd, err := os.Getwd()
