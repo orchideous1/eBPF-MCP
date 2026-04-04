@@ -1,8 +1,10 @@
 log/**
-.github/*
-.claude/**
-.vscode/
 package/**
 exe/
-assets/
 .env
+.github/*
+.claude/worktrees/
+.claude/settings.local.json
+.claude/CLAUDE.md
+.claude/mcp.json
+.vscode/
