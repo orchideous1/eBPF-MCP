@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
+
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 var testProbeCounter uint64
@@ -139,5 +142,144 @@ func TestControllerNotFound(t *testing.T) {
 	}
 	if _, err := controller.Update("not_registered", map[string]any{"a": 1}); !errors.Is(err, ErrProbeNotFound) {
 		t.Fatalf("expected ErrProbeNotFound on update, got %v", err)
+	}
+}
+
+// dbWriteProbe is a probe that creates a table and inserts one row on Start.
+type dbWriteProbe struct {
+	BaseProbe
+	name string
+}
+
+func (p *dbWriteProbe) Name() string { return p.name }
+
+func (p *dbWriteProbe) Start(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS test_events (id INTEGER)"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO test_events VALUES (42)"); err != nil {
+		return err
+	}
+	p.SetState(StateLoaded)
+	return nil
+}
+
+func (p *dbWriteProbe) Stop() error {
+	p.SetState(StateUnloaded)
+	return nil
+}
+
+func (p *dbWriteProbe) Update(map[string]interface{}) error { return nil }
+
+func (p *dbWriteProbe) Flush() error { return nil }
+
+func TestControllerLazyDBLifecycle(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "lazy.duckdb")
+	db, err := sql.Open("duckdb", dbPath)
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	if err := db.Ping(); err != nil {
+		t.Fatalf("ping duckdb: %v", err)
+	}
+
+	controller, err := NewController(db)
+	if err != nil {
+		t.Fatalf("new controller: %v", err)
+	}
+
+	dbOpener := func(path string) (*sql.DB, error) {
+		db2, err := sql.Open("duckdb", path)
+		if err != nil {
+			return nil, err
+		}
+		if err := db2.Ping(); err != nil {
+			_ = db2.Close()
+			return nil, err
+		}
+		return db2, nil
+	}
+	controller.EnableLazyDB(dbPath, dbOpener)
+
+	name := fmt.Sprintf("db_write_probe_%d", atomic.AddUint64(&testProbeCounter, 1))
+	Register(name, func() Probe {
+		return &dbWriteProbe{name: name}
+	})
+
+	ctx := context.Background()
+
+	// Step 1: Load probe -> should write data and keep db open
+	st, err := controller.Load(ctx, name)
+	if err != nil {
+		t.Fatalf("load probe: %v", err)
+	}
+	if st.State != "loaded" {
+		t.Fatalf("expected loaded state, got %+v", st)
+	}
+
+	if controller.db == nil {
+		t.Fatalf("expected db to be open after load")
+	}
+
+	// Step 2: Unload probe -> should auto close db
+	st, err = controller.Unload(name)
+	if err != nil {
+		t.Fatalf("unload probe: %v", err)
+	}
+	if st.State != "unloaded" {
+		t.Fatalf("expected unloaded state, got %+v", st)
+	}
+
+	if controller.db != nil {
+		t.Fatalf("expected db to be closed after last probe unloaded")
+	}
+
+	// Step 3: Reopen db from outside (simulate external script) and verify data
+	db2, err := sql.Open("duckdb", dbPath)
+	if err != nil {
+		t.Fatalf("reopen db externally: %v", err)
+	}
+	var count int
+	if err := db2.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_events").Scan(&count); err != nil {
+		t.Fatalf("query test_events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row in test_events, got %d", count)
+	}
+	// 必须在 Reload 前关闭外部连接，避免 DuckDB 同进程连接缓存导致数据污染
+	if err := db2.Close(); err != nil {
+		t.Fatalf("close external db: %v", err)
+	}
+
+	// Step 4: Reload probe -> should auto reopen a fresh db (old file archived)
+	st, err = controller.Load(ctx, name)
+	if err != nil {
+		t.Fatalf("reload probe: %v", err)
+	}
+	if st.State != "loaded" {
+		t.Fatalf("expected loaded state after reload, got %+v", st)
+	}
+	if controller.db == nil {
+		t.Fatalf("expected db to be reopened after reload")
+	}
+
+	// Step 5: Verify the new db is fresh (old data no longer present)
+	var countNew int
+	if err := controller.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_events").Scan(&countNew); err != nil {
+		t.Fatalf("query test_events in fresh db: %v", err)
+	}
+	if countNew != 1 {
+		t.Fatalf("expected 1 row in fresh db after reload (probe re-inserts), got %d", countNew)
+	}
+
+	// Step 6: Confirm archive file exists
+	entries, err := filepath.Glob(dbPath + ".*")
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected archived db file to exist after reload, got entries=%v err=%v", entries, err)
+	}
+
+	// Cleanup
+	if _, err := controller.Unload(name); err != nil {
+		t.Fatalf("final unload: %v", err)
 	}
 }

@@ -1,0 +1,32 @@
+probes:
+  - type: nfs_setattr
+    title: 设置文件属性
+    layer: nfs-client
+    level: L2
+    scene: 度量NFS-Client侧设置文件属性请求的延迟
+    entrypoints:
+      - nfs_setattr
+    params:
+      - name: filter_pid
+        type: u32
+        description: 目标进程ID，用于过滤特定进程的NFS setattr事件
+        optional: true
+        example: 1234
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 发起NFS setattr请求的进程ID
+        - name: comm
+          type: str
+          description: 发起NFS setattr请求的进程名称（最多16字符）
+        - name: time_stamp
+          type: u64
+          description: 事件发生的绝对时间戳（纳秒级，自系统启动以来的时间）
+        - name: lat
+          type: u64
+          description: NFS setattr请求的延迟（纳秒），从请求发出到完成的时间
+        - name: ret
+          type: s64
+          description: NFS setattr请求的返回值（0表示成功，负数表示错误码）
+    risks: 高并发 I/O 场景下全量追踪可能有开销，可采用filter_pid进行进程追踪

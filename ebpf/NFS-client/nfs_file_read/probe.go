@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"sync"
+	"time"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -32,6 +35,7 @@ type NFSFileReadProbe struct {
 	links  []link.Link
 	reader *ringbuf.Reader
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
@@ -138,6 +142,9 @@ file VARCHAR
 	evtCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
 
+	p.wg.Add(1)
+	go p.consume()
+
 	go func() {
 		<-evtCtx.Done()
 		if p.reader != nil {
@@ -145,23 +152,29 @@ file VARCHAR
 		}
 	}()
 
-	go p.consume()
-
 	return nil
 }
 
 func (p *NFSFileReadProbe) consume() {
+	defer p.wg.Done()
 	var event bpfEvent
 	count := 0
 
 	for {
+		// 设置读取超时，避免无限阻塞
+		p.reader.SetDeadline(time.Now().Add(100 * time.Millisecond))
+
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				log.Println("ringbuf closed, exiting nfs_file_read consumer")
+				log.Println("[nfs_file_read] ringbuf closed, exiting consumer")
 				return
 			}
-			log.Printf("reading from ringbuf: %v", err)
+			// 超时错误是预期的，继续循环
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
+			}
+			log.Printf("[nfs_file_read] reading from ringbuf: %v", err)
 			continue
 		}
 
@@ -189,15 +202,43 @@ func (p *NFSFileReadProbe) consume() {
 }
 
 func (p *NFSFileReadProbe) Stop() error {
-	if p.cancel != nil {
-		p.cancel()
+	log.Println("[nfs_file_read] Stop() called, shutting down...")
+
+	// 1. 先 Flush 数据
+	if p.appender != nil {
+		log.Println("[nfs_file_read] flushing pending data...")
+		_ = p.appender.Flush()
 	}
 
+	// 2. 取消 context
+	if p.cancel != nil {
+		p.cancel()
+		log.Println("[nfs_file_read] context cancelled")
+	}
+
+	// 3. 关闭 ringbuf reader，使 Read() 立即返回
 	if p.reader != nil {
 		_ = p.reader.Close()
+		log.Println("[nfs_file_read] ringbuf reader closed")
 	}
+
+	// 4. 等待 consumer 退出（带 2 秒超时）
+	log.Println("[nfs_file_read] waiting for consumer to finish (max 2s)...")
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("[nfs_file_read] consumer finished gracefully")
+	case <-time.After(2 * time.Second):
+		log.Println("[nfs_file_read] consumer wait timeout, forcing continue")
+	}
+
+	// 5. 清理资源
 	if p.appender != nil {
-		_ = p.appender.Flush()
 		_ = p.appender.Close()
 	}
 	if p.dbConn != nil {
@@ -210,6 +251,7 @@ func (p *NFSFileReadProbe) Stop() error {
 	if p.objs != (bpfObjects{}) {
 		_ = p.objs.Close()
 	}
+	log.Println("[nfs_file_read] Stop() completed")
 	return nil
 }
 

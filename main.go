@@ -13,29 +13,41 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	// 自动导入所有探针包以触发 init() 注册
 	_ "ebpf-mcp/internal/probes/registry"
 	"ebpf-mcp/internal/probes"
 	"ebpf-mcp/internal/server"
 	_ "github.com/duckdb/duckdb-go/v2"
+
+	"github.com/cilium/ebpf/rlimit"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// 加载 .env 文件中的环境变量（如果存在）
+	if err := godotenv.Load(); err != nil {
+		// .env 文件不存在不是错误，静默继续
+		log.Printf("no .env file found or failed to load: %v", err)
+	}
+
+	// 移除内存锁定限制，这是加载 eBPF 程序的必要条件
+	if err := rlimit.RemoveMemlock(); err != nil {
+		log.Fatalf("failed to remove memlock limit: %v", err)
+	}
+
 	var transport string
 	var port string
 	var token string
 	var debug bool
 
-	flag.StringVar(&transport, "transport", server.TransportStdio, "transport type: stdio or http")
+	flag.StringVar(&transport, "transport", server.TransportHTTP, "transport type: stdio or http")
 	flag.StringVar(&port, "port", "8080", "http port")
-	flag.StringVar(&token, "token", "", "bearer token for http transport")
+	flag.StringVar(&token, "token", os.Getenv("MCP_AUTH_TOKEN"), "bearer token for http transport")
 	flag.BoolVar(&debug, "debug", false, "enable debug mode")
 	flag.Parse()
 
-	if token == "" {
-		token = os.Getenv("MCP_AUTH_TOKEN")
-	}
 	dbPath := os.Getenv("EBPF_MCP_DUCKDB_PATH")
 	if dbPath == "" {
 		dbPath = "database/ebpf-mcp.duckdb"
@@ -63,16 +75,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open duckdb: %v", err)
 	}
-	defer db.Close()
 
 	controller, err := probes.NewController(db)
 	if err != nil {
 		log.Fatalf("failed to create probe controller: %v", err)
 	}
+	controller.EnableLazyDB(dbPath, openDuckDB)
 	defer func() {
+		log.Println("[main] shutting down controller...")
+		start := time.Now()
 		if err := controller.Shutdown(); err != nil {
-			log.Printf("failed to shutdown probes cleanly: %v", err)
+			log.Printf("[main] failed to shutdown probes cleanly: %v", err)
 		}
+		log.Printf("[main] controller shutdown took %v", time.Since(start))
 	}()
 
 	cfg := server.ServerConfig{
@@ -94,6 +109,7 @@ func main() {
 		log.Fatalf("server stopped with error: %v", err)
 	}
 }
+
 
 func openDuckDB(dbPath string) (*sql.DB, error) {
 	dir := filepath.Dir(dbPath)

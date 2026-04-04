@@ -1,0 +1,46 @@
+probes:
+  - type: sys_call_trace
+    title: 系统调用追踪
+    layer: Sys-call
+    level: L1
+    scene: 追踪全系统或特定进程的系统调用入口和出口，采集调用号、返回值、进入时间戳和延迟
+    entrypoints:
+      - raw_syscalls/sys_enter
+      - raw_syscalls/sys_exit
+    params:
+      - name: filter_pid
+        type: u32
+        description: 目标进程ID，用于过滤特定进程的系统调用事件
+        optional: true
+        example: 1234
+      - name: filter_syscall_id
+        type: u32
+        description: 目标系统调用号，用于过滤特定系统调用
+        optional: true
+        example: 0
+      - name: filter_comm
+        type: string
+        description: 目标进程名，用于过滤特定进程名的系统调用事件
+        optional: true
+        example: "nginx"
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 发起系统调用的进程ID
+        - name: comm
+          type: str
+          description: 发起系统调用的进程名称（最多16字符）
+        - name: syscall_id
+          type: u32
+          description: 系统调用号
+        - name: ret
+          type: s64
+          description: 系统调用返回值（仅在exit事件中有效）
+        - name: duration
+          type: u64
+          description: 系统调用延迟（纳秒），仅在exit事件中有效
+        - name: enter_time_stamp
+          type: u64
+          description: 进入系统调用的时间戳（纳秒，自系统启动以来）
+    risks: 高频系统调用场景下全量追踪可能带来较大开销，建议通过filter_pid或filter_syscall_id进行过滤

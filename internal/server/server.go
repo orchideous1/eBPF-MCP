@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
@@ -80,10 +81,14 @@ func (s *Server) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			s.logger.Infof("shutdown signal received, stopping HTTP server")
-			shutdownErr := httpServer.Shutdown(context.Background())
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shutdownErr := httpServer.Shutdown(shutdownCtx)
 			if shutdownErr != nil {
+				s.logger.Errorf("HTTP server shutdown error: %v", shutdownErr)
 				return shutdownErr
 			}
+			s.logger.Infof("HTTP server stopped successfully")
 			return nil
 		case err := <-errCh:
 			if err == nil || errors.Is(err, http.ErrServerClosed) {

@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
+	"time"
 )
 
 var (
@@ -30,6 +32,9 @@ type Controller struct {
 	db       *sql.DB
 	probes   map[string]Probe // 已加载的探针实例
 	statuses map[string]ProbeStatus
+
+	dbPath   string
+	dbOpener func(path string) (*sql.DB, error)
 }
 
 // NewController creates a controller bound to one shared database handle.
@@ -44,10 +49,74 @@ func NewController(db *sql.DB) (*Controller, error) {
 	}, nil
 }
 
+// EnableLazyDB enables on-demand open/close of the database connection.
+// When enabled, Controller will automatically reopen db on Load if it was closed,
+// and automatically checkpoint + close db when the last probe is Unloaded or Shutdown.
+func (c *Controller) EnableLazyDB(dbPath string, dbOpener func(path string) (*sql.DB, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dbPath = dbPath
+	c.dbOpener = dbOpener
+}
+
+func (c *Controller) openDBLocked() error {
+	if c.dbOpener == nil {
+		return fmt.Errorf("db opener not configured")
+	}
+
+	// 如果已有数据库文件存在，先重命名归档，避免前后两次数据相互污染
+	if _, err := os.Stat(c.dbPath); err == nil {
+		timestamp := time.Now().Format("20060102-150405")
+		archivePath := c.dbPath + "." + timestamp
+		if err := os.Rename(c.dbPath, archivePath); err != nil {
+			return fmt.Errorf("archive existing db: %w", err)
+		}
+		// 一并重命名可能存在的 WAL 文件
+		walPath := c.dbPath + ".wal"
+		if _, err := os.Stat(walPath); err == nil {
+			_ = os.Rename(walPath, archivePath+".wal")
+		}
+	}
+
+	db, err := c.dbOpener(c.dbPath)
+	if err != nil {
+		return err
+	}
+	c.db = db
+	return nil
+}
+
+func (c *Controller) checkpointAndCloseDBLocked() error {
+	// 1. Flush all probes first
+	for _, probe := range c.probes {
+		_ = probe.Flush()
+	}
+
+	// 2. CHECKPOINT to merge WAL into main file
+	if _, err := c.db.Exec("CHECKPOINT"); err != nil {
+		// Log the error but still try to close db
+		// (we intentionally ignore the error to avoid leaking the handle)
+		_ = err
+	}
+
+	// 3. Close db and reset
+	if err := c.db.Close(); err != nil {
+		return err
+	}
+	c.db = nil
+	return nil
+}
+
 // Load instantiates and starts a registered probe.
 func (c *Controller) Load(ctx context.Context, name string) (Status, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.db == nil {
+		if err := c.openDBLocked(); err != nil {
+			return Status{}, fmt.Errorf("open db: %w", err)
+		}
+	}
 
 	if _, loaded := c.probes[name]; loaded {
 		return c.statusLocked(name), ErrProbeAlreadyLoaded
@@ -99,6 +168,11 @@ func (c *Controller) Unload(name string) (Status, error) {
 	delete(c.probes, name)
 	c.statuses[name] = probe.GetStatus()
 	st := Status{Name: name, State: "unloaded", Loaded: false}
+
+	// 如果已没有加载的探针，自动 checkpoint 并关闭 db（仅在启用了懒加载时）
+	if len(c.probes) == 0 && c.db != nil && c.dbOpener != nil {
+		_ = c.checkpointAndCloseDBLocked()
+	}
 	return st, nil
 }
 
@@ -189,6 +263,10 @@ func (c *Controller) Shutdown() error {
 		c.statuses[name] = probe.GetStatus()
 	}
 	c.probes = make(map[string]Probe)
+
+	if c.db != nil && c.dbOpener != nil {
+		_ = c.checkpointAndCloseDBLocked()
+	}
 	return shutdownErr
 }
 
@@ -264,6 +342,20 @@ func (c *Controller) Flush(name string) error {
 	}
 
 	return probe.Flush()
+}
+
+// FlushAll 强制将所有已加载探针的缓冲区数据写入数据库
+func (c *Controller) FlushAll() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var flushErr error
+	for name, probe := range c.probes {
+		if err := probe.Flush(); err != nil && flushErr == nil {
+			flushErr = fmt.Errorf("flush probe %s: %w", name, err)
+		}
+	}
+	return flushErr
 }
 
 func (c *Controller) statusLocked(name string) Status {

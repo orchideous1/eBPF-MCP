@@ -1,3 +1,22 @@
+# 编译项目
+# 编译输出到 exe/ebpf-mcp
+.PHONY: build
+build:
+	@echo "Building ebpf-mcp..."
+	@mkdir -p exe
+	go build -o exe/ebpf-mcp .
+	@echo "Build complete: exe/ebpf-mcp"
+
+# 运行项目（STDIO模式，默认）
+.PHONY: run
+run: build
+	sudo -E ./exe/ebpf-mcp
+
+# 运行项目（HTTP模式）
+.PHONY: run-http
+run-http: build
+	sudo -E ./exe/ebpf-mcp -transport http -port 8080
+
 # 默认对所有探针执行 go generate
 # 使用方式: make generate [endpoint=<endpoint>]
 generate:
@@ -36,5 +55,12 @@ clean-testcache:
 
 clean-log:
 	rm -rf ./log/**
+
+# 清理编译产物
+.PHONY: clean
+clean:
+	@rm -rf exe/
+	@go clean
+	@echo "Clean complete"
 
 
