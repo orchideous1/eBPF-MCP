@@ -1,50 +1,45 @@
 # eBPF-MCP 启动指南
 
-本文档介绍如何编译、配置和启动 eBPF-MCP 服务器，以及 AI 智能体如何通过 MCP 协议与 eBPF 探针交互。
+本文档介绍环境变量配置、MCP 客户端配置以及完整的启动流程。
 
 ## 目录
 
-- [编译项目](#编译项目)
-- [配置 MCP 服务器](#配置-mcp-服务器)
-- [启动命令](#启动命令)
 - [环境变量](#环境变量)
+- [MCP 客户端配置](#mcp-客户端配置)
+- [启动命令](#启动命令)
 - [MCP 工具使用](#mcp-工具使用)
-- [端到端测试](#端到端测试)
+- [故障排查](#故障排查)
 
 ---
 
-## 编译项目
+## 环境变量
 
-### 前置要求
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `MCP_AUTH_TOKEN` | HTTP 传输认证令牌 | "" |
+| `EBPF_MCP_DUCKDB_PATH` | DuckDB 数据库路径 | `database/ebpf-mcp.duckdb` |
+| `MCP_LOG_SCENARIO` | 日志场景名称 | 自动生成 |
 
-- Go 1.24.0+
-- Linux 内核 5.8+（支持 eBPF）
-- root 权限（eBPF 加载需要）
-- bpftool（用于生成 eBPF 绑定代码）
-
-### 编译命令
+### 使用环境变量
 
 ```bash
-# 编译项目到 exe/ebpf-mcp
-make build
+# 导出环境变量
+export MCP_AUTH_TOKEN="my-token"
+export EBPF_MCP_DUCKDB_PATH="/custom/path/db.duckdb"
+export MCP_LOG_SCENARIO="production"
 
-# 或者直接使用 go build
-go build -o exe/ebpf-mcp .
+# 使用 sudo -E 保留环境变量启动
+sudo -E ./exe/ebpf-mcp
 ```
 
-### 生成 eBPF 绑定代码（首次编译或修改探针后需要）
-
+验证环境变量传递：
 ```bash
-# 为所有探针生成 eBPF 代码
-make generate
-
-# 为指定探针生成代码
-make generate endpoint=nfs_file_read
+sudo -E env | grep MCP
 ```
 
 ---
 
-## 配置 MCP 服务器
+## MCP 客户端配置
 
 ### 1. STDIO 模式（推荐，用于本地 MCP 客户端）
 
@@ -146,27 +141,6 @@ sudo -E ./exe/ebpf-mcp -transport http -port 8080
 | `-port` | HTTP 模式端口 | `8080` |
 | `-token` | HTTP 模式认证令牌 | 从环境变量读取 |
 | `-debug` | 启用调试日志 | `false` |
-
----
-
-## 环境变量
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `MCP_AUTH_TOKEN` | HTTP 传输认证令牌 | "" |
-| `EBPF_MCP_DUCKDB_PATH` | DuckDB 数据库路径 | `database/ebpf-mcp.duckdb` |
-| `MCP_LOG_SCENARIO` | 日志场景名称 | 自动生成 |
-
-使用 `-E` 参数保留环境变量：
-
-```bash
-# 导出环境变量
-export MCP_AUTH_TOKEN="my-token"
-export EBPF_MCP_DUCKDB_PATH="/custom/path/db.duckdb"
-
-# 使用 sudo -E 保留环境变量启动
-sudo -E ./exe/ebpf-mcp
-```
 
 ---
 
@@ -395,89 +369,9 @@ sudo -E ./exe/ebpf-mcp -transport http -port 8081
 
 ---
 
-## 端到端测试
-
-项目提供端到端（E2E）测试套件，用于验证 MCP 服务器的核心功能，无需 root 权限即可运行。
-
-### 测试覆盖范围
-
-E2E 测试位于 `test/integration/` 目录，包含以下测试模块：
-
-| 测试文件 | 测试内容 |
-|---------|---------|
-| `mcp_http_e2e_test.go` | HTTP 传输模式的完整流程测试 |
-| `mcp_stdio_e2e_test.go` | STDIO 传输模式的完整流程测试 |
-| `mock_probe.go` | Mock 探针实现，用于无特权环境测试 |
-| `helper_test.go` | 测试辅助函数和通用工具 |
-
-### 测试特点
-
-- **无需 root 权限**：使用 Mock 探针替代真实 eBPF 程序，可在普通用户环境运行
-- **覆盖双传输模式**：同时验证 HTTP 和 STDIO 两种 MCP 传输协议
-- **完整生命周期**：测试探针加载、配置、状态查询、卸载全流程
-- **独立运行**：每个测试用例自包含，不依赖外部服务
-
-### 运行 E2E 测试
-
-```bash
-# 运行所有 E2E 测试
-go test -v ./test/integration/...
-
-# 运行指定测试文件
-go test -v ./test/integration/ -run TestHTTPMCPServer
-go test -v ./test/integration/ -run TestSTDIOMCPServer
-
-# 带竞态检测运行
-go test -race -v ./test/integration/...
-
-# 查看测试覆盖率
-go test -cover -v ./test/integration/...
-```
-
-### 测试输出示例
-
-```
-=== RUN   TestHTTPMCPServer
-=== RUN   TestHTTPMCPServer/ProbeLifecycle
-    mcp_http_e2e_test.go:123: 探针 nfs_file_read 加载成功
-    mcp_http_e2e_test.go:145: 探针状态: loaded
-    mcp_http_e2e_test.go:167: 探针卸载成功
---- PASS: TestHTTPMCPServer (2.34s)
-=== RUN   TestSTDIOMCPServer
-=== RUN   TestSTDIOMCPServer/ProbeLifecycle
-    mcp_stdio_e2e_test.go:89: STDIO 服务器启动成功
-    mcp_stdio_e2e_test.go:112: 探针查询成功，返回 2 个可用探针
---- PASS: TestSTDIOMCPServer (1.56s)
-PASS
-ok      github.com/shaojianqing/eBPF-MCP/test/integration       3.91s
-```
-
-### 测试前置条件
-
-- Go 1.24.0+
-- 已编译项目（`make build` 或 `go build`）
-- 无需 root 权限
-- 无需 Linux 内核 eBPF 支持（使用 Mock 探针）
-
-### 故障排查
-
-**测试找不到可执行文件**：
-```bash
-# 确保已编译
-make build
-
-# 或手动编译
-go build -o exe/ebpf-mcp .
-```
-
-**端口冲突（HTTP 测试）**：
-- 测试会自动选择可用端口，但如果系统资源紧张可能失败
-- 关闭占用 8080-8090 范围端口的其他服务
-
----
-
 ## 相关文档
 
+- [项目概况](../CLAUDE.md) - 快速开始和基本命令
 - [设计文档](DESIGN.md) - 系统架构设计
-- [开发路线图](DEVELOP_ROADMAP.md) - 开发计划
-- [测试平台](testbench.md) - 测试环境搭建
+- [测试平台](testbench.md) - 详细测试矩阵和执行指南
+- [探针管理](probes.md) - 探针扩展和管理方法
