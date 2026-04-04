@@ -1,5 +1,8 @@
-log/*
+log/**
 .github/*
-.claude/*
-package/*
+.claude/**
+.vscdeo/
+package/**
+exe/
+assets/
 .env
