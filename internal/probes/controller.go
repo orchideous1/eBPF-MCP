@@ -3,16 +3,11 @@ package probes
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
 	"sync"
-)
 
-var (
-	ErrProbeNotFound      = errors.New("probe not found")
-	ErrProbeAlreadyLoaded = errors.New("probe already loaded")
-	ErrProbeNotLoaded     = errors.New("probe not loaded")
+	"ebpf-mcp/internal/logx"
 )
 
 // Status captures probe runtime state managed by Controller.
@@ -57,7 +52,7 @@ func (c *Controller) EnableLazyDB(dbPath string, dbOpener func(path string) (*sq
 
 func (c *Controller) openDBLocked() error {
 	if c.dbOpener == nil {
-		return fmt.Errorf("db opener not configured")
+		return logx.ErrDBOpenerNotConfigured
 	}
 
 	db, err := c.dbOpener(c.dbPath)
@@ -96,27 +91,27 @@ func (c *Controller) Load(ctx context.Context, name string) (Status, error) {
 
 	if c.db == nil {
 		if err := c.openDBLocked(); err != nil {
-			return Status{}, fmt.Errorf("open db: %w", err)
+			return Status{}, logx.NewDomainErrorWithCause(logx.ErrorDBConnection, "open db", err)
 		}
 	}
 
 	if _, loaded := c.probes[name]; loaded {
-		return c.statusLocked(name), ErrProbeAlreadyLoaded
+		return c.statusLocked(name), logx.ErrProbeAlreadyLoaded
 	}
 	probe, ok := GetProbe(name)
 	if !ok {
 		// 检查是否有元数据（YAML配置），如果没有则返回错误
 		if !HasMetadata(name) {
-			return Status{}, ErrProbeNotFound
+			return Status{}, logx.ErrProbeNotFound
 		}
-		return Status{}, fmt.Errorf("probe %s has metadata but no implementation registered", name)
+		return Status{}, logx.Wrapf(logx.ErrProbeNotFound, "probe %s has metadata but no implementation registered", name)
 	}
 
 	if err := probe.Start(ctx, c.db); err != nil {
 		probe.SetState(StateError, err.Error())
 		st := Status{Name: name, State: "error", Loaded: false, LastError: err.Error()}
 		c.statuses[name] = probe.GetStatus()
-		return st, fmt.Errorf("start probe %s: %w", name, err)
+		return st, logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, fmt.Sprintf("start probe %s", name), err)
 	}
 
 	probe.SetState(StateLoaded)
@@ -134,16 +129,16 @@ func (c *Controller) Unload(name string) (Status, error) {
 	probe, loaded := c.probes[name]
 	if !loaded {
 		if !HasProbe(name) && !HasMetadata(name) {
-			return Status{}, ErrProbeNotFound
+			return Status{}, logx.ErrProbeNotFound
 		}
-		return c.statusLocked(name), ErrProbeNotLoaded
+		return c.statusLocked(name), logx.ErrProbeNotLoaded
 	}
 
 	if err := probe.Stop(); err != nil {
 		probe.SetState(StateError, err.Error())
 		st := Status{Name: name, State: "error", Loaded: true, LastError: err.Error()}
 		c.statuses[name] = probe.GetStatus()
-		return st, fmt.Errorf("stop probe %s: %w", name, err)
+		return st, logx.NewDomainErrorWithCause(logx.ErrorProbeStopFailed, fmt.Sprintf("stop probe %s", name), err)
 	}
 
 	probe.SetState(StateUnloaded)
@@ -181,7 +176,7 @@ func (c *Controller) Status(name string) (Status, error) {
 		}, nil
 	}
 	if !HasProbe(name) && !HasMetadata(name) {
-		return Status{}, ErrProbeNotFound
+		return Status{}, logx.ErrProbeNotFound
 	}
 	return Status{Name: name, State: "unloaded", Loaded: false}, nil
 }
@@ -210,16 +205,16 @@ func (c *Controller) Update(name string, config map[string]any) (Status, error) 
 	probe, loaded := c.probes[name]
 	if !loaded {
 		if !HasProbe(name) && !HasMetadata(name) {
-			return Status{}, ErrProbeNotFound
+			return Status{}, logx.ErrProbeNotFound
 		}
-		return c.statusLocked(name), ErrProbeNotLoaded
+		return c.statusLocked(name), logx.ErrProbeNotLoaded
 	}
 
 	if err := probe.Update(config); err != nil {
 		probe.SetState(StateError, err.Error())
 		st := Status{Name: name, State: "error", Loaded: true, LastError: err.Error()}
 		c.statuses[name] = probe.GetStatus()
-		return st, fmt.Errorf("update probe %s: %w", name, err)
+		return st, logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, fmt.Sprintf("update probe %s", name), err)
 	}
 
 	probe.SetState(StateLoaded)
@@ -236,7 +231,7 @@ func (c *Controller) Shutdown() error {
 	var shutdownErr error
 	for name, probe := range c.probes {
 		if err := probe.Stop(); err != nil && shutdownErr == nil {
-			shutdownErr = fmt.Errorf("stop probe %s: %w", name, err)
+			shutdownErr = logx.NewDomainErrorWithCause(logx.ErrorProbeStopFailed, fmt.Sprintf("stop probe %s", name), err)
 			probe.SetState(StateError, err.Error())
 			c.statuses[name] = probe.GetStatus()
 			continue
@@ -268,7 +263,7 @@ func (c *Controller) GetProbeInfo(name string) (ProbeInfo, error) {
 
 	info, exists := GetProbeInfo(name, status)
 	if !exists {
-		return ProbeInfo{}, ErrProbeNotFound
+		return ProbeInfo{}, logx.ErrProbeNotFound
 	}
 
 	return info, nil
@@ -305,7 +300,7 @@ func (c *Controller) ListProbeInfos() []ProbeInfo {
 func (c *Controller) GetProbeMetadata(name string) (ProbeMetadata, error) {
 	meta, exists := GetProbeMetadata(name)
 	if !exists {
-		return ProbeMetadata{}, ErrProbeNotFound
+		return ProbeMetadata{}, logx.ErrProbeNotFound
 	}
 	return meta, nil
 }
@@ -318,9 +313,9 @@ func (c *Controller) Flush(name string) error {
 	probe, loaded := c.probes[name]
 	if !loaded {
 		if !HasProbe(name) && !HasMetadata(name) {
-			return ErrProbeNotFound
+			return logx.ErrProbeNotFound
 		}
-		return ErrProbeNotLoaded
+		return logx.ErrProbeNotLoaded
 	}
 
 	return probe.Flush()
@@ -334,7 +329,7 @@ func (c *Controller) FlushAll() error {
 	var flushErr error
 	for name, probe := range c.probes {
 		if err := probe.Flush(); err != nil && flushErr == nil {
-			flushErr = fmt.Errorf("flush probe %s: %w", name, err)
+			flushErr = logx.NewDomainErrorWithCause(logx.ErrorDBOperation, fmt.Sprintf("flush probe %s", name), err)
 		}
 	}
 	return flushErr

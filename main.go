@@ -18,6 +18,7 @@ import (
 
 	// 自动导入所有探针包以触发 init() 注册
 	_ "ebpf-mcp/internal/probes/registry"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 	"ebpf-mcp/internal/server"
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -113,7 +114,7 @@ func openDuckDB(dbDir string) (*sql.DB, error) {
 	// 解析为绝对路径目录
 	dbPath, err := resolveDBPath(dbDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve db path: %w", err)
+		return nil, logx.Wrap(err, "resolve db path")
 	}
 
 	// 确保目录存在

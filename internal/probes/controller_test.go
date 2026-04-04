@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ebpf-mcp/internal/logx"
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
@@ -117,15 +118,15 @@ func TestControllerConflicts(t *testing.T) {
 	if _, err := controller.Load(context.Background(), name); err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if _, err := controller.Load(context.Background(), name); !errors.Is(err, ErrProbeAlreadyLoaded) {
-		t.Fatalf("expected ErrProbeAlreadyLoaded, got %v", err)
+	if _, err := controller.Load(context.Background(), name); !errors.Is(err, logx.ErrProbeAlreadyLoaded) {
+		t.Fatalf("expected logx.ErrProbeAlreadyLoaded, got %v", err)
 	}
 
 	if _, err := controller.Unload(name); err != nil {
 		t.Fatalf("unload: %v", err)
 	}
-	if _, err := controller.Unload(name); !errors.Is(err, ErrProbeNotLoaded) {
-		t.Fatalf("expected ErrProbeNotLoaded, got %v", err)
+	if _, err := controller.Unload(name); !errors.Is(err, logx.ErrProbeNotLoaded) {
+		t.Fatalf("expected logx.ErrProbeNotLoaded, got %v", err)
 	}
 }
 
@@ -135,14 +136,14 @@ func TestControllerNotFound(t *testing.T) {
 		t.Fatalf("new controller: %v", err)
 	}
 
-	if _, err := controller.Load(context.Background(), "not_registered"); !errors.Is(err, ErrProbeNotFound) {
-		t.Fatalf("expected ErrProbeNotFound on load, got %v", err)
+	if _, err := controller.Load(context.Background(), "not_registered"); !errors.Is(err, logx.ErrProbeNotFound) {
+		t.Fatalf("expected logx.ErrProbeNotFound on load, got %v", err)
 	}
-	if _, err := controller.Status("not_registered"); !errors.Is(err, ErrProbeNotFound) {
-		t.Fatalf("expected ErrProbeNotFound on status, got %v", err)
+	if _, err := controller.Status("not_registered"); !errors.Is(err, logx.ErrProbeNotFound) {
+		t.Fatalf("expected logx.ErrProbeNotFound on status, got %v", err)
 	}
-	if _, err := controller.Update("not_registered", map[string]any{"a": 1}); !errors.Is(err, ErrProbeNotFound) {
-		t.Fatalf("expected ErrProbeNotFound on update, got %v", err)
+	if _, err := controller.Update("not_registered", map[string]any{"a": 1}); !errors.Is(err, logx.ErrProbeNotFound) {
+		t.Fatalf("expected logx.ErrProbeNotFound on update, got %v", err)
 	}
 }
 

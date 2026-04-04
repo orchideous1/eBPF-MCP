@@ -1,4 +1,5 @@
 //go:build linux
+
 //go:generate go tool bpf2go -cflags "-O2" -tags linux bpf nfs_file_write.c -- -I ../../headers
 
 package nfsclient
@@ -20,6 +21,7 @@ import (
 	"github.com/duckdb/duckdb-go/v2"
 
 	database "ebpf-mcp/internal/db"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
@@ -83,7 +85,7 @@ func (p *NFSFileWriteProbe) Name() string {
 
 func (p *NFSFileWriteProbe) Start(ctx context.Context, db *sql.DB) error {
 	if db == nil {
-		return fmt.Errorf("db is nil")
+		return logx.ErrDBIsNil
 	}
 
 	// 1. Setup DuckDB table and appender
@@ -96,19 +98,19 @@ comm VARCHAR,
 file VARCHAR
 )`)
 	if err != nil {
-		return fmt.Errorf("creating table: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "creating table", err)
 	}
 
 	p.appender, p.dbConn, err = database.NewDuckDBAppender(ctx, db, "", "nfs_file_write")
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("creating appender: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "creating appender", err)
 	}
 
 	// 2. Load BPF objects
 	if err := loadBpfObjects(&p.objs, nil); err != nil {
 		p.Stop()
-		return fmt.Errorf("loading objects: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "loading objects", err)
 	}
 
 	// 3. Attach tracing
@@ -117,7 +119,7 @@ file VARCHAR
 	})
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("attaching tracing: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "attaching tracing", err)
 	}
 	p.links = append(p.links, entryLink)
 
@@ -127,7 +129,7 @@ file VARCHAR
 	})
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("attaching tracing exit: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "attaching tracing exit", err)
 	}
 	p.links = append(p.links, exitLink)
 
@@ -135,7 +137,7 @@ file VARCHAR
 	rd, err := ringbuf.NewReader(p.objs.Events)
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("opening ringbuf reader: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "opening ringbuf reader", err)
 	}
 	p.reader = rd
 
@@ -269,7 +271,7 @@ func (p *NFSFileWriteProbe) Update(config map[string]interface{}) error {
 		return nil
 	}
 	if p.objs.FilterPid == nil || p.objs.FilterFile == nil || p.objs.FilterComm == nil {
-		return fmt.Errorf("probe is not started")
+		return logx.ErrProbeNotStarted
 	}
 
 	// // 诊断：检查变量是否为只读
@@ -280,42 +282,41 @@ func (p *NFSFileWriteProbe) Update(config map[string]interface{}) error {
 	if raw, ok := config["filter_pid"]; ok {
 		pid, err := toUint64(raw)
 		if err != nil {
-			return fmt.Errorf("invalid filter_pid: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, "invalid filter_pid", err)
 		}
 		if err := p.objs.FilterPid.Set(pid); err != nil {
-			return fmt.Errorf("set filter_pid: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_pid", err)
 		}
 	}
 
 	if raw, ok := config["filter_file"]; ok {
 		s, ok := raw.(string)
 		if !ok {
-			return fmt.Errorf("invalid filter_file: expected string, got %T", raw)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, fmt.Sprintf("invalid filter_file: expected string, got %T", raw), nil)
 		}
 		// 将字符串复制到固定大小的字节数组
 		var fileBytes [16]byte
 		copy(fileBytes[:], s)
 		if err := p.objs.FilterFile.Set(fileBytes); err != nil {
-			return fmt.Errorf("set filter_file: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_file", err)
 		}
 	}
 
 	if raw, ok := config["filter_comm"]; ok {
 		s, ok := raw.(string)
 		if !ok {
-			return fmt.Errorf("invalid filter_comm: expected string, got %T", raw)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, fmt.Sprintf("invalid filter_comm: expected string, got %T", raw), nil)
 		}
 		// 将字符串复制到固定大小的字节数组
 		var commBytes [32]byte
 		copy(commBytes[:], s)
 		if err := p.objs.FilterComm.Set(commBytes); err != nil {
-			return fmt.Errorf("set filter_comm: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_comm", err)
 		}
 	}
 
 	return nil
 }
-
 
 func cStringFromInt8(src []int8) string {
 	b := make([]byte, 0, len(src))
@@ -338,28 +339,28 @@ func toUint64(v interface{}) (uint64, error) {
 		return uint64(t), nil
 	case int64:
 		if t < 0 {
-			return 0, fmt.Errorf("negative value")
+			return 0, logx.ErrNegativeValue
 		}
 		return uint64(t), nil
 	case int:
 		if t < 0 {
-			return 0, fmt.Errorf("negative value")
+			return 0, logx.ErrNegativeValue
 		}
 		return uint64(t), nil
 	case float64:
 		if t < 0 {
-			return 0, fmt.Errorf("negative value")
+			return 0, logx.ErrNegativeValue
 		}
 		return uint64(t), nil
 	default:
-		return 0, fmt.Errorf("unsupported type %T", v)
+		return 0, logx.Wrapf(logx.ErrUnsupportedType, "unsupported type %T", v)
 	}
 }
 
 func toBool(v interface{}) (bool, error) {
 	b, ok := v.(bool)
 	if !ok {
-		return false, fmt.Errorf("unsupported type %T", v)
+		return false, logx.Wrapf(logx.ErrUnsupportedType, "unsupported type %T", v)
 	}
 	return b, nil
 }

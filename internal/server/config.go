@@ -1,9 +1,10 @@
 package server
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
+
+	"ebpf-mcp/internal/logx"
 )
 
 const (
@@ -29,18 +30,18 @@ func (c ServerConfig) Validate() error {
 	}
 
 	if transport != TransportStdio && transport != TransportHTTP {
-		return fmt.Errorf("invalid transport %q", c.Transport)
+		return logx.Wrapf(logx.ErrInvalidTransport, "invalid transport %q", c.Transport)
 	}
 
 	if transport == TransportHTTP {
 		if strings.TrimSpace(c.AuthToken) == "" {
-			return fmt.Errorf("auth token is required for http transport")
+			return logx.ErrAuthTokenRequired
 		}
 		if strings.TrimSpace(c.HTTPPort) == "" {
-			return fmt.Errorf("http port is required for http transport")
+			return logx.ErrHTTPPortRequired
 		}
 		if _, err := strconv.Atoi(c.HTTPPort); err != nil {
-			return fmt.Errorf("invalid http port %q: %w", c.HTTPPort, err)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidConfig, "invalid http port", err)
 		}
 	}
 

@@ -3,7 +3,8 @@ package database
 import (
 	"context"
 	"database/sql"
-	"fmt"
+
+	"ebpf-mcp/internal/logx"
 	"github.com/duckdb/duckdb-go/v2"
 )
 
@@ -11,14 +12,14 @@ import (
 func NewDuckDBAppender(ctx context.Context, db *sql.DB, schema, table string) (*duckdb.Appender, *sql.Conn, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("could not get connection: %w", err)
+		return nil, nil, logx.NewDomainErrorWithCause(logx.ErrorDBConnection, "could not get connection", err)
 	}
 
 	var appender *duckdb.Appender
 	err = conn.Raw(func(driverConn any) error {
 		duckdbConn, ok := driverConn.(*duckdb.Conn)
 		if !ok {
-			return fmt.Errorf("connection is not a duckdb.Conn")
+			return logx.ErrNotDuckDBConn
 		}
 
 		app, err := duckdb.NewAppenderFromConn(duckdbConn, schema, table)

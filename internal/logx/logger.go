@@ -28,10 +28,10 @@ func NewRunLogger(debug bool, scenario string) (*Logger, error) {
 
 	logDir, err := resolveLogDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve log dir: %w", err)
+		return nil, Wrap(err, "resolve log dir")
 	}
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create log dir: %w", err)
+		return nil, Wrap(err, "create log dir")
 	}
 
 	fileName := fmt.Sprintf("%s_%s.log", time.Now().Format("20060102_150405.000"), sanitizeScenario(scenario))
@@ -39,7 +39,7 @@ func NewRunLogger(debug bool, scenario string) (*Logger, error) {
 
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("open log file: %w", err)
+		return nil, Wrap(err, "open log file")
 	}
 
 	mw := io.MultiWriter(os.Stderr, f)

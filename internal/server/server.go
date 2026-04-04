@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -31,12 +30,12 @@ func New(cfg ServerConfig, controller *probes.Controller) (*Server, error) {
 		return nil, err
 	}
 	if controller == nil {
-		return nil, fmt.Errorf("controller is required")
+		return nil, logx.ErrControllerRequired
 	}
 
 	logger, err := logx.NewRunLogger(cfg.Debug, logx.DetectScenario("server_"+cfg.Transport))
 	if err != nil {
-		return nil, fmt.Errorf("create logger: %w", err)
+		return nil, logx.Wrap(err, "create logger")
 	}
 	logger.Infof("creating MCP server: name=ebpf-mcp version=0.1.0 transport=%s", cfg.Transport)
 	if cfg.Debug {
@@ -96,14 +95,14 @@ func (s *Server) Start(ctx context.Context) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("unsupported transport %q", s.cfg.Transport)
+		return logx.Wrapf(logx.ErrUnsupportedTransport, "unsupported transport %q", s.cfg.Transport)
 	}
 }
 
 // newHTTPHandler builds the HTTP chain for MCP requests.
 func (s *Server) newHTTPHandler() (http.Handler, error) {
 	if s.cfg.AuthToken == "" {
-		return nil, fmt.Errorf("auth token is required")
+		return nil, logx.ErrAuthTokenRequired
 	}
 	base := server.NewStreamableHTTPServer(s.mcpServer)
 	s.logger.Debugf("building HTTP handler with bearer auth middleware")
@@ -303,7 +302,7 @@ func (s *Server) handleProbeResourceInfo(ctx context.Context, req mcp.CallToolRe
 func newJSONResult(v any) (*mcp.CallToolResult, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("marshal result: %w", err)
+		return nil, logx.Wrap(err, "marshal result")
 	}
 	return mcp.NewToolResultText(string(b)), nil
 }

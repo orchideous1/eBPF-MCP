@@ -20,6 +20,7 @@ import (
 	"github.com/duckdb/duckdb-go/v2"
 
 	database "ebpf-mcp/internal/db"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
@@ -87,7 +88,7 @@ func (p *SysCallTraceProbe) Start(ctx context.Context, db *sql.DB) error {
 	log.Printf("[sys_call_trace] Start() called")
 
 	if db == nil {
-		return fmt.Errorf("db is nil")
+		return logx.ErrDBIsNil
 	}
 
 	log.Printf("[sys_call_trace] creating table sys_call_trace...")
@@ -100,7 +101,7 @@ enter_time_stamp UBIGINT,
 comm VARCHAR
 )`)
 	if err != nil {
-		return fmt.Errorf("creating table: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "creating table", err)
 	}
 	log.Printf("[sys_call_trace] table created successfully")
 
@@ -108,14 +109,14 @@ comm VARCHAR
 	p.appender, p.dbConn, err = database.NewDuckDBAppender(ctx, db, "", "sys_call_trace")
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("creating appender: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "creating appender", err)
 	}
 	log.Printf("[sys_call_trace] appender created successfully")
 
 	log.Printf("[sys_call_trace] loading eBPF objects...")
 	if err := loadBpfObjects(&p.objs, nil); err != nil {
 		p.Stop()
-		return fmt.Errorf("loading objects: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "loading objects", err)
 	}
 	log.Printf("[sys_call_trace] eBPF objects loaded successfully")
 
@@ -124,7 +125,7 @@ comm VARCHAR
 	enterLink, err := link.Tracepoint("raw_syscalls", "sys_enter", p.objs.TraceSysEnter, nil)
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("attaching sys_enter tracepoint: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "attaching sys_enter tracepoint", err)
 	}
 	p.links = append(p.links, enterLink)
 	log.Printf("[sys_call_trace] sys_enter tracepoint attached")
@@ -134,7 +135,7 @@ comm VARCHAR
 	exitLink, err := link.Tracepoint("raw_syscalls", "sys_exit", p.objs.TraceSysExit, nil)
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("attaching sys_exit tracepoint: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "attaching sys_exit tracepoint", err)
 	}
 	p.links = append(p.links, exitLink)
 	log.Printf("[sys_call_trace] sys_exit tracepoint attached")
@@ -143,7 +144,7 @@ comm VARCHAR
 	rd, err := ringbuf.NewReader(p.objs.Events)
 	if err != nil {
 		p.Stop()
-		return fmt.Errorf("opening ringbuf reader: %w", err)
+		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "opening ringbuf reader", err)
 	}
 	p.reader = rd
 	log.Printf("[sys_call_trace] ringbuf reader created")
@@ -200,7 +201,6 @@ func (p *SysCallTraceProbe) consume() {
 			continue
 		}
 
-
 		if err := binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &event); err != nil {
 			log.Printf("[sys_call_trace] ERROR parsing event: %v", err)
 			continue
@@ -226,7 +226,7 @@ func (p *SysCallTraceProbe) consume() {
 			//log.Printf("[sys_call_trace] flushing %d events to database...", count)
 			if err := p.appender.Flush(); err != nil {
 				log.Printf("[sys_call_trace] ERROR flushing appender: %v", err)
-			} 
+			}
 			count = 0
 		}
 	}
@@ -316,42 +316,42 @@ func (p *SysCallTraceProbe) Update(config map[string]interface{}) error {
 		return nil
 	}
 	if p.objs.FilterPid == nil || p.objs.FilterSyscallId == nil || p.objs.FilterComm == nil {
-		return fmt.Errorf("probe is not started")
+		return logx.ErrProbeNotStarted
 	}
 
 	if raw, ok := config["filter_pid"]; ok {
 		pid, err := toUint64(raw)
 		if err != nil {
-			return fmt.Errorf("invalid filter_pid: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, "invalid filter_pid", err)
 		}
 		if err := p.objs.FilterPid.Set(pid); err != nil {
-			return fmt.Errorf("set filter_pid: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_pid", err)
 		}
 	}
 
 	if raw, ok := config["filter_syscall_id"]; ok {
 		sid, err := toUint64(raw)
 		if err != nil {
-			return fmt.Errorf("invalid filter_syscall_id: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, "invalid filter_syscall_id", err)
 		}
 		if sid > ^uint64(0) { // no-op range check, uint32 will truncate safely
 			// sid fits into uint64, Set accepts uint64 for u32 map val
 		}
 		if err := p.objs.FilterSyscallId.Set(uint32(sid)); err != nil {
-			return fmt.Errorf("set filter_syscall_id: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_syscall_id", err)
 		}
 	}
 
 	if raw, ok := config["filter_comm"]; ok {
 		s, ok := raw.(string)
 		if !ok {
-			return fmt.Errorf("invalid filter_comm: expected string, got %T", raw)
+			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, fmt.Sprintf("invalid filter_comm: expected string, got %T", raw), nil)
 		}
 		// 限制长度并转换为字节数组
 		var commBytes [16]byte
 		copy(commBytes[:], s)
 		if err := p.objs.FilterComm.Set(commBytes); err != nil {
-			return fmt.Errorf("set filter_comm: %w", err)
+			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_comm", err)
 		}
 	}
 
@@ -379,20 +379,20 @@ func toUint64(v interface{}) (uint64, error) {
 		return uint64(t), nil
 	case int64:
 		if t < 0 {
-			return 0, fmt.Errorf("negative value")
+			return 0, logx.ErrNegativeValue
 		}
 		return uint64(t), nil
 	case int:
 		if t < 0 {
-			return 0, fmt.Errorf("negative value")
+			return 0, logx.ErrNegativeValue
 		}
 		return uint64(t), nil
 	case float64:
 		if t < 0 {
-			return 0, fmt.Errorf("negative value")
+			return 0, logx.ErrNegativeValue
 		}
 		return uint64(t), nil
 	default:
-		return 0, fmt.Errorf("unsupported type %T", v)
+		return 0, logx.Wrapf(logx.ErrUnsupportedType, "unsupported type %T", v)
 	}
 }
