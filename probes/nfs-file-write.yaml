@@ -43,4 +43,5 @@ probes:
           type: str
           description: 被访问的文件路径（相对于NFS挂载点或绝对路径）
 
-    risks: 高并发 I/O 场景下全量追踪可能有开销，可采用filter_pid\filter_file\filter_comm进行进程追踪
+    risks: medium
+    risk-description: 高并发 I/O 场景下全量追踪可能有开销，可采用filter_pid\filter_file\filter_comm进行进程追踪

@@ -43,4 +43,5 @@ probes:
         - name: enter_time_stamp
           type: u64
           description: 进入系统调用的时间戳（纳秒，自系统启动以来）
-    risks: 高频系统调用场景下全量追踪可能带来较大开销，建议通过filter_pid或filter_syscall_id进行过滤
+    risks: high
+    risk-description: 高频系统调用场景下全量追踪可能带来较大开销，建议通过filter_pid或filter_syscall_id进行过滤

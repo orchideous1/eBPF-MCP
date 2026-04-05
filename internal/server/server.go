@@ -76,7 +76,11 @@ func (s *Server) Start(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("shutdown signal received, stopping HTTP server")
+			s.logger.Infof("shutdown signal received, stopping probes & server")
+			// 先停止所有探针                                                                      
+			if err := s.controller.Shutdown(); err != nil {                                        
+				s.logger.Errorf("controller shutdown error: %v", err)                              
+			}  
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			shutdownErr := httpServer.Shutdown(shutdownCtx)

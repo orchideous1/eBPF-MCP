@@ -56,6 +56,11 @@ clean-testcache:
 clean-log:
 	rm -rf ./log/**
 
+clean-result:
+	rm -rf ./database/**
+
+# clean: clean-all: clean-log clean-result
+
 # 清理编译产物
 .PHONY: clean
 clean:
