@@ -11,6 +11,7 @@ import (
 	"time"
 
 	_ "ebpf-mcp/ebpf/NFS-client/nfs_file_write"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
@@ -112,7 +113,7 @@ func TestNFSFileWriteProbe_ControllerLifecycle(t *testing.T) {
 	// 2. 测试重复加载（应该失败）
 	t.Log("Step 2: 验证重复加载返回错误")
 	_, err = controller.Load(ctx, "nfs_file_write")
-	if !errors.Is(err, probes.ErrProbeAlreadyLoaded) {
+	if !errors.Is(err, logx.ErrProbeAlreadyLoaded) {
 		t.Fatalf("expected ErrProbeAlreadyLoaded, got: %v", err)
 	}
 
@@ -156,7 +157,7 @@ func TestNFSFileWriteProbe_ControllerLifecycle(t *testing.T) {
 	// 6. 测试重复卸载（应该失败）
 	t.Log("Step 6: 验证重复卸载返回错误")
 	_, err = controller.Unload("nfs_file_write")
-	if !errors.Is(err, probes.ErrProbeNotLoaded) {
+	if !errors.Is(err, logx.ErrProbeNotLoaded) {
 		t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 	}
 }
@@ -443,7 +444,7 @@ func TestNFSFileWriteProbe_ErrorHandling(t *testing.T) {
 	// 更新未加载的探针
 	t.Log("验证更新未加载探针返回错误...")
 	_, err = controller.Update("nfs_file_write", map[string]any{"filter_pid": 1})
-	if !errors.Is(err, probes.ErrProbeNotLoaded) {
+	if !errors.Is(err, logx.ErrProbeNotLoaded) {
 		t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 	}
 

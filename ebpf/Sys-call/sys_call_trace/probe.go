@@ -12,8 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
-	"time"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -38,7 +36,7 @@ type SysCallTraceProbe struct {
 	links  []link.Link
 	reader *ringbuf.Reader
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	done   chan struct{} // 替代 WaitGroup，用于通知 consume 退出
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
@@ -85,13 +83,11 @@ func (p *SysCallTraceProbe) Name() string {
 
 // Start 启动探针，加载 eBPF 程序并附加到 tracepoint。
 func (p *SysCallTraceProbe) Start(ctx context.Context, db *sql.DB) error {
-	log.Printf("[sys_call_trace] Start() called")
 
 	if db == nil {
 		return logx.ErrDBIsNil
 	}
 
-	log.Printf("[sys_call_trace] creating table sys_call_trace...")
 	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS sys_call_trace (
 pid UBIGINT,
 syscall_id UINTEGER,
@@ -105,7 +101,6 @@ comm VARCHAR
 	}
 	log.Printf("[sys_call_trace] table created successfully")
 
-	log.Printf("[sys_call_trace] creating DuckDB appender...")
 	p.appender, p.dbConn, err = database.NewDuckDBAppender(ctx, db, "", "sys_call_trace")
 	if err != nil {
 		p.Stop()
@@ -113,7 +108,6 @@ comm VARCHAR
 	}
 	log.Printf("[sys_call_trace] appender created successfully")
 
-	log.Printf("[sys_call_trace] loading eBPF objects...")
 	if err := loadBpfObjects(&p.objs, nil); err != nil {
 		p.Stop()
 		return logx.NewDomainErrorWithCause(logx.ErrorProbeStartFailed, "loading objects", err)
@@ -121,7 +115,6 @@ comm VARCHAR
 	log.Printf("[sys_call_trace] eBPF objects loaded successfully")
 
 	// Attach sys_enter tracepoint
-	log.Printf("[sys_call_trace] attaching sys_enter tracepoint...")
 	enterLink, err := link.Tracepoint("raw_syscalls", "sys_enter", p.objs.TraceSysEnter, nil)
 	if err != nil {
 		p.Stop()
@@ -131,7 +124,6 @@ comm VARCHAR
 	log.Printf("[sys_call_trace] sys_enter tracepoint attached")
 
 	// Attach sys_exit tracepoint
-	log.Printf("[sys_call_trace] attaching sys_exit tracepoint...")
 	exitLink, err := link.Tracepoint("raw_syscalls", "sys_exit", p.objs.TraceSysExit, nil)
 	if err != nil {
 		p.Stop()
@@ -140,7 +132,6 @@ comm VARCHAR
 	p.links = append(p.links, exitLink)
 	log.Printf("[sys_call_trace] sys_exit tracepoint attached")
 
-	log.Printf("[sys_call_trace] creating ringbuf reader...")
 	rd, err := ringbuf.NewReader(p.objs.Events)
 	if err != nil {
 		p.Stop()
@@ -149,55 +140,50 @@ comm VARCHAR
 	p.reader = rd
 	log.Printf("[sys_call_trace] ringbuf reader created")
 
-	// 使用独立的 background context，不依赖传入的 ctx
-	// 传入的 ctx 是 MCP 工具调用的上下文，会在工具返回后取消
-	// 探针需要独立生命周期，由 Stop() 方法控制退出
-	_, cancel := context.WithCancel(context.Background())
+	// 创建独立 context，不依赖传入的 ctx（MCP 工具上下文会在返回后取消）
+	probeCtx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
+	p.done = make(chan struct{})
 
-	p.wg.Add(1)
-	go p.consume()
-	log.Printf("[sys_call_trace] consumer goroutine started")
+	// 桥接 goroutine：context 取消时关闭 reader，打断阻塞的 Read()
+	go func() {
+		<-probeCtx.Done()
+		if p.reader != nil {
+			_ = p.reader.Close()
+		}
+	}()
 
-	log.Printf("[sys_call_trace] Start() completed successfully")
+	go p.consume(probeCtx)
 	return nil
 }
 
-func (p *SysCallTraceProbe) consume() {
-	defer p.wg.Done()
+func (p *SysCallTraceProbe) consume(ctx context.Context) {
+	defer close(p.done)
+
 	var event bpfEvent
 	count := 0
 	totalProcessed := 0
 
 	log.Printf("[sys_call_trace] consumer started, waiting for events...")
 
-	// 创建 ticker 用于定期刷新缓冲区（即使没有新事件）
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
 	for {
-		// 先检查 context 是否已取消（通过 Stop() 调用）
+		// 检查 context 是否已取消
 		select {
-		case <-time.After(100 * time.Millisecond):
-			// 短暂超时后继续尝试读取
+		case <-ctx.Done():
+			log.Printf("[sys_call_trace] context cancelled, exiting consumer. Total processed: %d", totalProcessed)
+			return
 		default:
 		}
 
-		// 设置读取超时，使 Read 不会无限阻塞
-		p.reader.SetDeadline(time.Now().Add(100 * time.Millisecond))
-
+		// 阻塞读取，但会被 reader.Close() 打断
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				// 这是正常退出路径，由 Stop() 调用 reader.Close() 触发
+				// 正常退出路径，由 context 取消触发 reader.Close()
 				log.Printf("[sys_call_trace] ringbuf closed, exiting consumer. Total processed: %d", totalProcessed)
 				return
 			}
-			// 超时错误是预期的，继续循环
-			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-				continue
-			}
-			log.Printf("[sys_call_trace] ERROR reading from ringbuf: %v", err)
+			// 其他错误继续循环，让 select 检查 context
 			continue
 		}
 
@@ -223,7 +209,6 @@ func (p *SysCallTraceProbe) consume() {
 		count++
 		totalProcessed++
 		if count >= 100 {
-			//log.Printf("[sys_call_trace] flushing %d events to database...", count)
 			if err := p.appender.Flush(); err != nil {
 				log.Printf("[sys_call_trace] ERROR flushing appender: %v", err)
 			}
@@ -236,48 +221,30 @@ func (p *SysCallTraceProbe) consume() {
 func (p *SysCallTraceProbe) Stop() error {
 	log.Printf("[sys_call_trace] Stop() called, shutting down probe...")
 
-	// 步骤 1: 立即 Flush 所有缓冲区数据（确保数据不丢失）
-	if p.appender != nil {
-		log.Printf("[sys_call_trace] flushing pending data...")
-		if err := p.appender.Flush(); err != nil {
-			log.Printf("[sys_call_trace] ERROR flush failed: %v", err)
-		} else {
-			log.Printf("[sys_call_trace] flush successful")
-		}
-	}
-
-	// 步骤 2: 取消 context，通知 consumer 退出
+	// 步骤 1: 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
 		log.Printf("[sys_call_trace] context cancelled")
 	}
 
-	// 步骤 3: 关闭 ringbuf reader，使 Read() 立即返回错误
-	if p.reader != nil {
-		_ = p.reader.Close()
-		log.Printf("[sys_call_trace] ringbuf reader closed")
+	// 步骤 2: 等待 consume goroutine 真正退出
+	// context 取消会触发桥接 goroutine 调用 reader.Close()，打断阻塞的 Read()
+	if p.done != nil {
+		<-p.done
+		log.Printf("[sys_call_trace] consumer exited")
 	}
 
-	// 步骤 4: 等待 consumer goroutine 退出（带 2 秒超时）
-	log.Printf("[sys_call_trace] waiting for consumer to finish (max 2s)...")
-	done := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		log.Printf("[sys_call_trace] consumer finished gracefully")
-	case <-time.After(2 * time.Second):
-		log.Printf("[sys_call_trace] consumer wait timeout, forcing continue")
-	}
-
-	// 步骤 5: 清理剩余资源
+	// 步骤 3: Flush 数据到数据库
 	if p.appender != nil {
+		log.Printf("[sys_call_trace] flushing pending data...")
+		if err := p.appender.Flush(); err != nil {
+			log.Printf("[sys_call_trace] ERROR flush failed: %v", err)
+		}
 		_ = p.appender.Close()
 		log.Printf("[sys_call_trace] appender closed")
 	}
+
+	// 步骤 4: 清理剩余资源
 	if p.dbConn != nil {
 		_ = p.dbConn.Close()
 		log.Printf("[sys_call_trace] db connection closed")

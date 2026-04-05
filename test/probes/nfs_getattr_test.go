@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_ "ebpf-mcp/ebpf/NFS-client/nfs_getattr"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
@@ -96,7 +97,7 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 	// 2. 测试重复加载（应该失败）
 	t.Log("Step 2: 验证重复加载返回错误")
 	_, err = controller.Load(ctx, "nfs_getattr")
-	if !errors.Is(err, probes.ErrProbeAlreadyLoaded) {
+	if !errors.Is(err, logx.ErrProbeAlreadyLoaded) {
 		t.Fatalf("expected ErrProbeAlreadyLoaded, got: %v", err)
 	}
 
@@ -135,7 +136,7 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 	// 6. 测试重复卸载（应该失败）
 	t.Log("Step 6: 验证重复卸载返回错误")
 	_, err = controller.Unload("nfs_getattr")
-	if !errors.Is(err, probes.ErrProbeNotLoaded) {
+	if !errors.Is(err, logx.ErrProbeNotLoaded) {
 		t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 	}
 }

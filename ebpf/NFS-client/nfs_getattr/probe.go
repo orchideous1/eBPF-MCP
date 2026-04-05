@@ -10,9 +10,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"log"
-	"net"
-	"sync"
-	"time"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -36,7 +33,7 @@ type NFSGetattrProbe struct {
 	links  []link.Link
 	reader *ringbuf.Reader
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	done   chan struct{}
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
@@ -135,43 +132,46 @@ comm VARCHAR
 	}
 	p.reader = rd
 
-	// 5. Start consuming
-	evtCtx, cancel := context.WithCancel(ctx)
+	// 5. Start consuming - 使用独立 context，不依赖上层 ctx
+	probeCtx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
+	p.done = make(chan struct{})
 
-	p.wg.Add(1)
-	go p.consume()
-
+	// 桥接 goroutine：context 取消时关闭 reader，打断阻塞的 Read()
 	go func() {
-		<-evtCtx.Done()
+		<-probeCtx.Done()
 		if p.reader != nil {
-			p.reader.Close() // Unblock reader loop.
+			_ = p.reader.Close()
 		}
 	}()
 
+	go p.consume(probeCtx)
 	return nil
 }
 
-func (p *NFSGetattrProbe) consume() {
-	defer p.wg.Done()
+func (p *NFSGetattrProbe) consume(ctx context.Context) {
+	defer close(p.done)
+
 	var event bpfEvent
 	count := 0
 
 	for {
-		// 设置读取超时，避免无限阻塞
-		p.reader.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		// 检查 context 是否已取消
+		select {
+		case <-ctx.Done():
+			log.Println("[nfs_getattr] context cancelled, exiting consumer")
+			return
+		default:
+		}
 
+		// 阻塞读取，但会被 reader.Close() 打断
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				log.Println("[nfs_getattr] ringbuf closed, exiting consumer")
 				return
 			}
-			// 超时错误是预期的，继续循环
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			log.Printf("[nfs_getattr] reading from ringbuf: %v", err)
+			// 其他错误继续循环，让 select 检查 context
 			continue
 		}
 
@@ -200,41 +200,21 @@ func (p *NFSGetattrProbe) consume() {
 func (p *NFSGetattrProbe) Stop() error {
 	log.Println("[nfs_getattr] Stop() called, shutting down...")
 
-	// 1. 先 Flush 数据
-	if p.appender != nil {
-		log.Println("[nfs_getattr] flushing pending data...")
-		_ = p.appender.Flush()
-	}
-
-	// 2. 取消 context
+	// 1. 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
 		log.Println("[nfs_getattr] context cancelled")
 	}
 
-	// 3. 关闭 ringbuf reader，使 Read() 立即返回
-	if p.reader != nil {
-		_ = p.reader.Close()
-		log.Println("[nfs_getattr] ringbuf reader closed")
+	// 2. 等待 consume goroutine 真正退出
+	if p.done != nil {
+		<-p.done
+		log.Println("[nfs_getattr] consumer exited")
 	}
 
-	// 4. 等待 consumer 退出（带 2 秒超时）
-	log.Println("[nfs_getattr] waiting for consumer to finish (max 2s)...")
-	done := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		log.Println("[nfs_getattr] consumer finished gracefully")
-	case <-time.After(2 * time.Second):
-		log.Println("[nfs_getattr] consumer wait timeout, forcing continue")
-	}
-
-	// 5. 清理资源
+	// 3. Flush 数据并清理资源
 	if p.appender != nil {
+		_ = p.appender.Flush()
 		_ = p.appender.Close()
 	}
 	if p.dbConn != nil {

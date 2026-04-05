@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
@@ -138,7 +139,7 @@ func (h *ProbeTestHelper) TestLifecycle(tc ProbeTestCase) {
 		// 2. 测试重复加载（应该失败）
 		t.Log("Step 2: 验证重复加载返回错误")
 		_, err = h.Controller.Load(ctx, tc.ProbeType)
-		if !errors.Is(err, probes.ErrProbeAlreadyLoaded) {
+		if !errors.Is(err, logx.ErrProbeAlreadyLoaded) {
 			t.Fatalf("expected ErrProbeAlreadyLoaded, got: %v", err)
 		}
 
@@ -168,7 +169,7 @@ func (h *ProbeTestHelper) TestLifecycle(tc ProbeTestCase) {
 		// 5. 测试重复卸载（应该失败）
 		t.Log("Step 5: 验证重复卸载返回错误")
 		_, err = h.Controller.Unload(tc.ProbeType)
-		if !errors.Is(err, probes.ErrProbeNotLoaded) {
+		if !errors.Is(err, logx.ErrProbeNotLoaded) {
 			t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 		}
 	})
@@ -331,19 +332,19 @@ func (h *ProbeTestHelper) TestErrorHandling(tc ProbeTestCase) {
 
 		// 更新未加载的探针
 		_, err := h.Controller.Update(tc.ProbeType, map[string]any{"filter_pid": 1})
-		if !errors.Is(err, probes.ErrProbeNotLoaded) {
+		if !errors.Is(err, logx.ErrProbeNotLoaded) {
 			t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 		}
 
 		// 加载不存在的探针
 		_, err = h.Controller.Load(ctx, "non_existent_probe")
-		if !errors.Is(err, probes.ErrProbeNotFound) {
+		if !errors.Is(err, logx.ErrProbeNotFound) {
 			t.Fatalf("expected ErrProbeNotFound, got: %v", err)
 		}
 
 		// 查询不存在的探针状态
 		_, err = h.Controller.Status("non_existent_probe")
-		if !errors.Is(err, probes.ErrProbeNotFound) {
+		if !errors.Is(err, logx.ErrProbeNotFound) {
 			t.Fatalf("expected ErrProbeNotFound, got: %v", err)
 		}
 	})

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_ "ebpf-mcp/ebpf/Sys-call/sys_call_trace"
+	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
@@ -97,7 +98,7 @@ func TestSysCallTraceProbe_ControllerLifecycle(t *testing.T) {
 
 	t.Log("Step 2: 重复加载应失败")
 	_, err = controller.Load(ctx, "sys_call_trace")
-	if !errors.Is(err, probes.ErrProbeAlreadyLoaded) {
+	if !errors.Is(err, logx.ErrProbeAlreadyLoaded) {
 		t.Fatalf("expected ErrProbeAlreadyLoaded, got: %v", err)
 	}
 
@@ -136,7 +137,7 @@ func TestSysCallTraceProbe_ControllerLifecycle(t *testing.T) {
 
 	t.Log("Step 6: 重复卸载应失败")
 	_, err = controller.Unload("sys_call_trace")
-	if !errors.Is(err, probes.ErrProbeNotLoaded) {
+	if !errors.Is(err, logx.ErrProbeNotLoaded) {
 		t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 	}
 }
@@ -255,8 +256,8 @@ func TestSysCallTraceProbe_DataCollection(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
-	// 查询 DuckDB
-	rows, err := db.Query("SELECT COUNT(*) FROM sys_call_trace WHERE pid = ?", uint64(currentPID)<<32)
+	// 查询 DuckDB - pid 存储的是 pid_tgid（高32位PID + 低32位TID），使用 >> 32 提取PID部分
+	rows, err := db.Query("SELECT COUNT(*) FROM sys_call_trace WHERE pid >> 32 = ?", uint32(currentPID))
 	if err != nil {
 		t.Logf("查询数据失败（可能无事件）: %v", err)
 		return
@@ -271,6 +272,160 @@ func TestSysCallTraceProbe_DataCollection(t *testing.T) {
 	}
 
 	t.Logf("数据库中包含 %d 条当前进程的事件记录", count)
+}
+
+// TestSysCallTraceProbe_FastStop 验证探针能快速停止（< 500ms）
+// 这是 Context 驱动并发控制的核心测试
+func TestSysCallTraceProbe_FastStop(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("需要 root 权限运行 eBPF 测试")
+	}
+
+	db := openTestDB(t)
+	controller, err := probes.NewController(db)
+	if err != nil {
+		t.Fatalf("failed to create controller: %v", err)
+	}
+	defer controller.Shutdown()
+
+	ctx := context.Background()
+
+	t.Log("加载探针...")
+	_, err = controller.Load(ctx, "sys_call_trace")
+	if err != nil {
+		t.Fatalf("failed to load probe: %v", err)
+	}
+
+	// 让探针运行一小段时间
+	time.Sleep(100 * time.Millisecond)
+
+	t.Log("停止探针...")
+	start := time.Now()
+
+	// 使用带超时的 channel 来强制兜底，防止测试挂起
+	type result struct {
+		status probes.Status
+		err    error
+	}
+	done := make(chan result, 1)
+
+	go func() {
+		status, err := controller.Unload("sys_call_trace")
+		done <- result{status, err}
+	}()
+
+	var status probes.Status
+	select {
+	case res := <-done:
+		status = res.status
+		err = res.err
+	case <-time.After(5 * time.Second): // 强制兜底：5秒超时
+		t.Fatalf("Unload timed out after 5s - possible deadlock in probe stop")
+	}
+
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("failed to unload probe: %v", err)
+	}
+	if status.Loaded {
+		t.Fatal("probe should be unloaded")
+	}
+
+	t.Logf("停止耗时: %v", elapsed)
+
+	// 验证停止时间 < 500ms（原实现需要 2s 超时）
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("Stop took too long: %v (expected < 500ms)", elapsed)
+	}
+
+	t.Log("✓ 快速停止测试通过")
+}
+
+// TestSysCallTraceProbe_ContextCancellation 验证 Context 取消机制
+// 确保 consume 能正确响应 ctx.Done() 并优雅退出
+func TestSysCallTraceProbe_ContextCancellation(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("需要 root 权限运行 eBPF 测试")
+	}
+
+	db := openTestDB(t)
+	controller, err := probes.NewController(db)
+	if err != nil {
+		t.Fatalf("failed to create controller: %v", err)
+	}
+	defer controller.Shutdown()
+
+	ctx := context.Background()
+
+	// 带强制超时的辅助函数
+	loadWithTimeout := func(round int) {
+		done := make(chan error, 1)
+		go func() {
+			_, err := controller.Load(ctx, "sys_call_trace")
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("round %d: failed to load probe: %v", round, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: Load timed out after 10s", round)
+		}
+	}
+
+	unloadWithTimeout := func(round int) {
+		done := make(chan error, 1)
+		go func() {
+			_, err := controller.Unload("sys_call_trace")
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("round %d: failed to unload probe: %v", round, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: Unload timed out after 5s - possible deadlock", round)
+		}
+	}
+
+	// 测试：连续多次加载/卸载，验证没有 goroutine 泄漏
+	for i := 0; i < 3; i++ {
+		t.Logf("第 %d 轮加载/卸载测试...", i+1)
+
+		loadWithTimeout(i + 1)
+		time.Sleep(50 * time.Millisecond)
+		unloadWithTimeout(i + 1)
+
+		// 验证状态正确（带超时）
+		statusDone := make(chan struct {
+			status probes.Status
+			err    error
+		}, 1)
+		go func() {
+			status, err := controller.Status("sys_call_trace")
+			statusDone <- struct {
+				status probes.Status
+				err    error
+			}{status, err}
+		}()
+
+		select {
+		case res := <-statusDone:
+			if res.err != nil {
+				t.Fatalf("round %d: failed to get status: %v", i+1, res.err)
+			}
+			if res.status.State != "unloaded" {
+				t.Fatalf("round %d: expected state 'unloaded', got '%s'", i+1, res.status.State)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("round %d: Status timed out after 2s", i+1)
+		}
+	}
+
+	t.Log("✓ Context 取消机制测试通过")
 }
 
 // TestSysCallTraceProbe_MetadataIntegrity 测试元数据完整性
