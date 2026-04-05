@@ -95,7 +95,8 @@ probes:
         - name: size
           type: u64
           description: 数据大小（字节）
-    risks: 可能对NFS性能产生轻微影响
+    risks: low
+    risk-description: 可能对NFS性能产生轻微影响
 ```
 
 ### 探针接口

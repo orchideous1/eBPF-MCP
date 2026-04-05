@@ -24,7 +24,7 @@ eBPF-MCP is a Go-based middleware that bridges AI agents with eBPF kernel observ
 ├── probes/                    # YAML probe configurations (static metadata)
 ├── ebpf/                      # eBPF C programs and Go implementations
 │   ├── headers/               # BPF helper definitions
-│   └── <layer>/               # Layer-specific probes
+│   └── <layer>/               # Layer-specific probes, including: Disk\Network\NFS-client\nfsd\RPC\Sys-call
 │       └── <endpoint>/        # Endpoint-specific probe directory
 ├── internal/
 │   ├── probes/                # Probe controller, registry, interfaces

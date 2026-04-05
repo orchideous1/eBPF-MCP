@@ -18,7 +18,7 @@ echo "checking $1"
 # fi
 
 # 2. 检查 available_filter_functions
-if sudo grep -qw "$FUNC_NAME" /sys/kernel/debug/tracing/available_filter_functions 2>/dev/null; then
+if sudo grep -qw "$FUNC_NAME" /sys/kernel/tracing/available_filter_functions; then
     echo "✅ 函数 '$FUNC_NAME' 支持 fentry/fexit。"
 else
     echo "❌ 函数 '$FUNC_NAME' 不在 available_filter_functions 列表中。"

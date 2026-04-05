@@ -1,0 +1,40 @@
+probes:
+  - type: nfsd4_read
+    title: NFSD读操作
+    layer: nfsd
+    level: L2
+    scene: 度量NFS服务端(nfsd)处理NFSv4读请求的延迟与大小
+    entrypoints:
+      - nfsd4_read
+    params:
+      - name: filter_pid
+        type: u32
+        description: 目标进程ID，用于过滤特定nfsd进程的读请求
+        optional: true
+        example: 1234
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 处理请求的nfsd进程ID
+        - name: comm
+          type: str
+          description: 处理请求的进程名称（通常为nfsd）
+        - name: time_stamp
+          type: u64
+          description: 事件发生的绝对时间戳（纳秒级，自系统启动以来的时间）
+        - name: lat
+          type: u64
+          description: 服务端处理读请求的延迟（纳秒）
+        - name: size
+          type: u64
+          description: 读取的数据大小（字节）
+        - name: offset
+          type: u64
+          description: 读取操作的文件偏移量
+        - name: xid
+          type: u32
+          description: RPC事务ID（从svc_rqst的rq_xid字段读取）
+
+    risks: medium
+    risk-description: 高并发读请求场景下全量追踪可能有性能开销，可采用filter_pid进行细粒度过滤

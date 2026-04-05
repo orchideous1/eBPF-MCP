@@ -23,19 +23,23 @@ description: 在 eBPF-MCP 项目中创建完整的 eBPF 探针，聚焦用户确
 
 ## 完整工作流
 
+首先进入计划模式，经过前三个阶段确定开发计划，然后执行开发任务
+
 ### 阶段 1：探针点确认（用户确认）
 
 **步骤**：
 1. 询问用户目标函数名
-2. 使用脚本验证函数可用性：
-   ```bash
-   ./scripts/check_fenty_availability.sh <func_name>
-   ```
-3. 确定探针类型：
+2. 要求用户确定探针类型：
    - `fentry/fexit` - 函数入口/出口（推荐，性能最好）
    - `kprobe/kretprobe` - 内核探针（兼容性更好）
    - `tracepoint` - 内核跟踪点
-4. 确定所属层（layer）：nfs-client, nfsd, network, syscall, block 等
+3. 确定所属层（layer）：nfs-client, nfsd, network, syscall, block 等
+
+注意事项：
+给用户提供便捷确定探针类型的命令：
+```
+./scripts/check_fentry_availability <end-point>
+```
 
 **输出**：确认的函数名、探针类型、所属层
 
@@ -78,6 +82,9 @@ description: 在 eBPF-MCP 项目中创建完整的 eBPF 探针，聚焦用户确
 - [ ] 可选字段按需添加
 - [ ] 字段读取逻辑正确
 
+**技巧**
+使用（./scripts/get_args_info.sh）获取结构体定义
+使用（./scripts/get_func_args.sh）获取函数参数定义
 **输出**：确认的逻辑设计
 
 ---
@@ -96,6 +103,7 @@ description: 在 eBPF-MCP 项目中创建完整的 eBPF 探针，聚焦用户确
 - params（filter_pid, filter_file, filter_comm）
 - outputs（fields 定义）
 - risks
+- risk-description
 
 #### 4.2 生成 eBPF C 代码
 
