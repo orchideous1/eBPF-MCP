@@ -1,6 +1,7 @@
 log/**
 log-agent/**
 package/**
+database/**
 exe/
 .env
 .github/*
