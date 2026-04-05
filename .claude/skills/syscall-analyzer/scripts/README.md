@@ -30,11 +30,11 @@
 ### 使用方式
 
 ```bash
-# 命令行执行
-duckdb /path/to/ebpf-mcp.duckdb < syscall_frequency.sql
+# 命令行执行（使用 $LATEST_DB 环境变量指向最新的数据库文件）
+duckdb $LATEST_DB < syscall_frequency.sql
 
 # 或直接在 duckdb shell 中执行
-.duckdb /path/to/ebpf-mcp.duckdb
+duckdb $LATEST_DB
 D select * from sys_call_trace limit 5;
 D .read syscall_frequency.sql
 ```
@@ -64,14 +64,17 @@ D .read syscall_frequency.sql
 #### 使用示例
 
 ```bash
+# 首先设置最新数据库环境变量
+export LATEST_DB=$(ls -t database/ebpf-mcp-*.duckdb | head -1)
+
 # 分析全部数据
-python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis
+python visualize.py --db-path $LATEST_DB --output-dir ./analysis
 
 # 分析特定进程
-python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis --pid 1234
+python visualize.py --db-path $LATEST_DB --output-dir ./analysis --pid 1234
 
 # 分析最近10分钟
-python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis --time-range 10m
+python visualize.py --db-path $LATEST_DB --output-dir ./analysis --time-range 10m
 ```
 
 #### 输出文件
@@ -91,11 +94,14 @@ python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis -
 ### 快速排查高延迟问题
 
 ```bash
+# 0. 设置最新数据库环境变量
+export LATEST_DB=$(ls -t database/ebpf-mcp-*.duckdb | head -1)
+
 # 1. 查看高延迟调用
-duckdb ebpf-mcp.duckdb < high_latency_calls.sql
+duckdb $LATEST_DB < high_latency_calls.sql
 
 # 2. 生成可视化图表
-python visualize.py --db-path ebpf-mcp.duckdb --output-dir ./latency_analysis
+python visualize.py --db-path $LATEST_DB --output-dir ./latency_analysis
 
 # 3. 重点查看 syscall_latency_by_type.png 和 top_slow_calls.png
 ```
@@ -103,20 +109,25 @@ python visualize.py --db-path ebpf-mcp.duckdb --output-dir ./latency_analysis
 ### 进程行为分析
 
 ```bash
+# 0. 设置最新数据库环境变量
+export LATEST_DB=$(ls -t database/ebpf-mcp-*.duckdb | head -1)
+
 # 1. 查看各进程调用统计
-duckdb ebpf-mcp.duckdb < process_stats.sql
+duckdb $LATEST_DB < process_stats.sql
 
 # 2. 查看进程-系统调用矩阵
-duckdb ebpf-mcp.duckdb < process_syscall_matrix.sql
+duckdb $LATEST_DB < process_syscall_matrix.sql
 
 # 3. 查看最慢进程排行
-duckdb ebpf-mcp.duckdb < top_slow_processes.sql
+duckdb $LATEST_DB < top_slow_processes.sql
 ```
 
 ### 全量可视化分析
 
 ```bash
-python visualize.py --db-path ebpf-mcp.duckdb --output-dir ./full_analysis
+# 设置最新数据库环境变量并执行分析
+export LATEST_DB=$(ls -t database/ebpf-mcp-*.duckdb | head -1)
+python visualize.py --db-path $LATEST_DB --output-dir ./full_analysis
 # 然后查看生成的所有图表和 summary.json
 ```
 

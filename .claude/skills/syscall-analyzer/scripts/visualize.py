@@ -9,9 +9,9 @@
     pip install duckdb pandas matplotlib seaborn numpy
 
 使用示例:
-    python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis
-    python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis --pid 1234
-    python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis --time-range "1m"
+    python visualize.py --db-path $LATEST_DB --output-dir ./analysis
+    python visualize.py --db-path $LATEST_DB --output-dir ./analysis --pid 1234
+    python visualize.py --db-path $LATEST_DB --output-dir ./analysis --time-range "1m"
 """
 
 import argparse
@@ -898,14 +898,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-    # 分析全部数据
-    python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis
+    # 分析全部数据（确保已设置 $LATEST_DB 环境变量）
+    python visualize.py --db-path $LATEST_DB --output-dir ./analysis
 
     # 分析特定进程
-    python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis --pid 1234
+    python visualize.py --db-path $LATEST_DB --output-dir ./analysis --pid 1234
 
     # 分析最近5分钟的数据
-    python visualize.py --db-path database/ebpf-mcp.duckdb --output-dir ./analysis --time-range 5m
+    python visualize.py --db-path $LATEST_DB --output-dir ./analysis --time-range 5m
         """
     )
 
