@@ -1,4 +1,5 @@
 log/**
+log-agent/**
 package/**
 exe/
 .env
