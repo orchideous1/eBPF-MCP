@@ -1,0 +1,36 @@
+probes:
+  - type: block_io_latency
+    title: 块设备I/O延迟
+    layer: Disk
+    level: L1
+    scene: 监控块设备I/O操作的延迟，追踪I/O请求从发起到底盘完成的时间
+    entrypoints:
+      - block/block_io_start
+      - block/block_io_done
+    params:
+      - name: filter_pid
+        type: u32
+        description: 目标进程ID，用于过滤特定进程的I/O事件
+        optional: true
+        example: 1234
+      - name: filter_comm
+        type: string
+        description: 目标进程名，用于过滤特定进程名的I/O事件
+        optional: true
+        example: "postgres"
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 发起I/O请求的进程ID
+        - name: comm
+          type: str
+          description: 发起I/O请求的进程名称（最多16字符）
+        - name: latency
+          type: u64
+          description: I/O操作延迟（纳秒），从start到done的时间差
+        - name: time_stamp
+          type: u64
+          description: I/O完成时间戳（纳秒，自系统启动以来）
+    risks: medium
+    risk-description: 高I/O吞吐场景下可能产生较多事件，建议通过filter_pid或filter_comm进行过滤以减少开销

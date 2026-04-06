@@ -1,0 +1,23 @@
+probes:
+  - type: svc_rqst_latency
+    title: SVC请求延迟
+    layer: SVC
+    level: L2
+    scene: 度量SVC请求从process到send的延迟，包含事务ID
+    entrypoints:
+      - svc_process
+      - svc_send
+    params: []
+    outputs:
+      fields:
+        - name: xid
+          type: u32
+          description: RPC事务ID（XID），从svc_rqst->rq_xid读取
+        - name: latency
+          type: u64
+          description: SVC请求处理延迟（纳秒），从svc_process到svc_send的时间
+        - name: start_timestamp
+          type: u64
+          description: SVC请求开始时间戳（纳秒级，自系统启动以来的时间）
+    risks: low
+    risk-description: 无过滤参数，全量追踪SVC请求，系统调用频率较低，风险可控

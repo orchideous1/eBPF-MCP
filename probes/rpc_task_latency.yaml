@@ -1,0 +1,42 @@
+probes:
+  - type: rpc_task_latency
+    title: RPC任务延迟
+    layer: RPC
+    level: L2
+    scene: 度量RPC任务从执行到完成的延迟，包含事务ID和过程名
+    entrypoints:
+      - rpc_execute
+      - rpc_exit_task
+    params:
+      - name: filter_pid
+        type: u32
+        description: 目标进程ID，用于过滤特定进程的RPC任务
+        optional: true
+        example: 1234
+      - name: filter_comm
+        type: str
+        description: 目标进程名（comm），用于过滤特定进程名称的RPC任务
+        optional: true
+        example: "nginx"
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 执行RPC任务的进程ID
+        - name: xid
+          type: u32
+          description: RPC事务ID（XID）
+        - name: proc_name
+          type: str
+          description: RPC过程名称（最多16字符）
+        - name: latency
+          type: u64
+          description: RPC任务执行延迟（纳秒），从rpc_execute到rpc_exit_task的时间
+        - name: start_timestamp
+          type: u64
+          description: RPC任务开始时间戳（纳秒级，自系统启动以来的时间）
+        - name: status
+          type: s32
+          description: RPC任务完成状态码（0表示成功，负值表示错误）
+    risks: medium
+    risk-description: 高频RPC调用场景下全量追踪可能有开销，可采用filter_pid或filter_comm进行进程追踪

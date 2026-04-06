@@ -55,7 +55,7 @@ func (h *ProbeTestHelper) Shutdown() {
 
 // SkipIfNotRoot 如果不是 root 用户则跳过测试
 func (h *ProbeTestHelper) SkipIfNotRoot() {
-	if os.Getuid() != 0 {
+	if os.Geteuid() != 0 {
 		h.t.Skip("需要 root 权限运行 eBPF 测试")
 	}
 }

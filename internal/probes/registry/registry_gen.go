@@ -5,10 +5,13 @@
 package registry
 
 import (
+	_ "ebpf-mcp/ebpf/Disk/block_io_latency"
 	_ "ebpf-mcp/ebpf/NFS-client/nfs_file_read"
 	_ "ebpf-mcp/ebpf/NFS-client/nfs_file_write"
 	_ "ebpf-mcp/ebpf/NFS-client/nfs_getattr"
 	_ "ebpf-mcp/ebpf/NFS-client/nfs_setattr"
+	_ "ebpf-mcp/ebpf/RPC/rpc_task_latency"
+	_ "ebpf-mcp/ebpf/SVC/svc_rqst_latency"
 	_ "ebpf-mcp/ebpf/Sys-call/sys_call_trace"
 	_ "ebpf-mcp/ebpf/nfsd/nfsd4_read"
 	_ "ebpf-mcp/ebpf/nfsd/nfsd4_write"
