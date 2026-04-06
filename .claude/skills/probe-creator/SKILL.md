@@ -83,8 +83,14 @@ description: 在 eBPF-MCP 项目中创建完整的 eBPF 探针，聚焦用户确
 - [ ] 字段读取逻辑正确
 
 **技巧**
+如果探针类型为fentry，提示用户通过以下脚本获取参数：
 使用（./scripts/get_args_info.sh）获取结构体定义
 使用（./scripts/get_func_args.sh）获取函数参数定义
+
+如果探针类型为tracepoint, 提示用户通过以下命令获取具体参数：
+```
+sudo cat /sys/kernel/tracing/events/<kernel-sub-system>/<tracepoint>/format
+```
 **输出**：确认的逻辑设计
 
 ---
