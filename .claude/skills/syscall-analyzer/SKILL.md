@@ -129,13 +129,13 @@ description: |
 
 **步骤目标**
 安全卸载探针，确保所有缓冲数据已写入数据库文件。
-> 在数据库目录(database/)中查找带时间戳的最新数据库文件(通常带有时间戳后缀，如 `ebpf-mcp-20250405-143022.duckdb`)
+> 在数据库目录(/tmp/database/)中查找带时间戳的最新数据库文件(通常带有时间戳后缀，如 `ebpf-mcp-20250405-143022.duckdb`)
 > 确保分析的是最新采集的数据。
 > 数据库文件记为$LATEST_DB
 
 **具体操作命令**
 ```
-export LATEST_DB = $(ls -t database/ebpf-mcp-*.duckdb | head -1) //修改环境变量为最新数据库文件，便于调用分析脚本
+export LATEST_DB = $(ls -t /tmp/database/ebpf-mcp-*.duckdb | head -1) //修改环境变量为最新数据库文件，便于调用分析脚本
 ```
 
 ```json

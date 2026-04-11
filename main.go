@@ -51,9 +51,10 @@ func main() {
 	flag.Parse()
 
 	// 获取数据库目录（环境变量或默认值）
+	// 默认使用 /tmp/database，确保数据库存放在临时目录而非项目目录
 	dbDir := os.Getenv("EBPF_MCP_DUCKDB_DIR")
 	if dbDir == "" {
-		dbDir = "database"
+		dbDir = "/tmp/database"
 	}
 
 	// 创建延迟处理的数据库 opener，每次打开时动态解析路径
@@ -140,27 +141,18 @@ func openDuckDB(dbDir string) (*sql.DB, error) {
 }
 
 // resolveDBPath 将数据库目录解析为完整的数据库文件路径（带时间戳命名）
+// 数据库统一存放在 /tmp 目录下，避免污染项目目录
 func resolveDBPath(dbDir string) (string, error) {
 	timestamp := time.Now().Format("20060102-150405")
 	dbFileName := fmt.Sprintf("ebpf-mcp.%s.duckdb", timestamp)
 
-	// 如果已经是绝对路径，直接拼接文件名
+	// 如果 dbDir 已经是绝对路径，直接使用
 	if filepath.IsAbs(dbDir) {
 		return filepath.Join(dbDir, dbFileName), nil
 	}
 
-	// 尝试相对于 repo root 解析
-	repoRoot, err := findRepoRoot()
-	if err == nil {
-		return filepath.Join(repoRoot, dbDir, dbFileName), nil
-	}
-
-	// 回退到当前工作目录
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(wd, dbDir, dbFileName), nil
+	// 否则将路径置于 /tmp 目录下
+	return filepath.Join("/tmp", dbDir, dbFileName), nil
 }
 
 func ensureDuckDBOwnership(dbPath string) error {
@@ -192,24 +184,4 @@ func ensureDuckDBOwnership(dbPath string) error {
 	}
 
 	return nil
-}
-
-
-func findRepoRoot() (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-
-	for {
-		if _, statErr := os.Stat(filepath.Join(wd, "go.mod")); statErr == nil {
-			return wd, nil
-		}
-
-		parent := filepath.Dir(wd)
-		if parent == wd {
-			return "", os.ErrNotExist
-		}
-		wd = parent
-	}
 }
