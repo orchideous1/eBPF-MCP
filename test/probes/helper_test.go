@@ -51,6 +51,9 @@ func (h *ProbeTestHelper) Shutdown() {
 	if h.Controller != nil {
 		h.Controller.Shutdown()
 	}
+	if h.DB != nil {
+		h.DB.Close()
+	}
 }
 
 // SkipIfNotRoot 如果不是 root 用户则跳过测试

@@ -390,11 +390,11 @@ func setupSysCallTestServer(t *testing.T) *syscallTestServer {
 
 // cleanup 清理测试资源
 func (ts *syscallTestServer) cleanup() {
-	if ts.controller != nil {
-		ts.controller.Shutdown()
-	}
 	if ts.httpServer != nil {
 		ts.httpServer.Close()
+	}
+	if ts.controller != nil {
+		ts.controller.Shutdown()
 	}
 	if ts.db != nil {
 		ts.db.Close()

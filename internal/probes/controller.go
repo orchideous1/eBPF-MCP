@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 
@@ -69,19 +70,19 @@ func (c *Controller) checkpointAndCloseDBLocked() error {
 		_ = probe.Flush()
 	}
 
+	var closeErr error
+
 	// 2. CHECKPOINT to merge WAL into main file
 	if _, err := c.db.Exec("CHECKPOINT"); err != nil {
-		// Log the error but still try to close db
-		// (we intentionally ignore the error to avoid leaking the handle)
-		_ = err
+		closeErr = err
 	}
 
 	// 3. Close db and reset
-	if err := c.db.Close(); err != nil {
-		return err
+	if err := c.db.Close(); err != nil && closeErr == nil {
+		closeErr = err
 	}
 	c.db = nil
-	return nil
+	return closeErr
 }
 
 // Load instantiates and starts a registered probe.
@@ -148,7 +149,9 @@ func (c *Controller) Unload(name string) (Status, error) {
 
 	// 如果已没有加载的探针，自动 checkpoint 并关闭 db（仅在启用了懒加载时）
 	if len(c.probes) == 0 && c.db != nil && c.dbOpener != nil {
-		_ = c.checkpointAndCloseDBLocked()
+		if err := c.checkpointAndCloseDBLocked(); err != nil {
+			log.Printf("[controller] checkpointAndCloseDB on unload failed: %v", err)
+		}
 	}
 	return st, nil
 }
@@ -242,7 +245,12 @@ func (c *Controller) Shutdown() error {
 	c.probes = make(map[string]Probe)
 
 	if c.db != nil && c.dbOpener != nil {
-		_ = c.checkpointAndCloseDBLocked()
+		if err := c.checkpointAndCloseDBLocked(); err != nil {
+			log.Printf("[controller] checkpointAndCloseDB on shutdown failed: %v", err)
+			if shutdownErr == nil {
+				shutdownErr = logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "checkpoint and close db", err)
+			}
+		}
 	}
 	return shutdownErr
 }

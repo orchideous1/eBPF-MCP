@@ -76,19 +76,20 @@ func (s *Server) Start(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("shutdown signal received, stopping probes & server")
-			// 先停止所有探针                                                                      
-			if err := s.controller.Shutdown(); err != nil {                                        
-				s.logger.Errorf("controller shutdown error: %v", err)                              
-			}  
+			s.logger.Infof("shutdown signal received, stopping HTTP server first")
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			shutdownErr := httpServer.Shutdown(shutdownCtx)
-			if shutdownErr != nil {
-				s.logger.Errorf("HTTP server shutdown error: %v", shutdownErr)
-				return shutdownErr
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				s.logger.Errorf("HTTP server shutdown error: %v", err)
+			} else {
+				s.logger.Infof("HTTP server stopped successfully")
 			}
-			s.logger.Infof("HTTP server stopped successfully")
+
+			// 再停止所有探针和数据库
+			s.logger.Infof("stopping probes & controller")
+			if err := s.controller.Shutdown(); err != nil {
+				s.logger.Errorf("controller shutdown error: %v", err)
+			}
 			return nil
 		case err := <-errCh:
 			if err == nil || errors.Is(err, http.ErrServerClosed) {

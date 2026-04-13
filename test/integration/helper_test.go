@@ -159,14 +159,14 @@ func setupTestServerWithConfig(t *testing.T, cfg server.ServerConfig) *testServe
 
 // Cleanup 清理测试资源
 func (ts *testServer) Cleanup() {
+	if ts.HTTPServer != nil {
+		ts.HTTPServer.Close()
+	}
 	if ts.Controller != nil {
 		ts.Controller.Shutdown()
 	}
 	if ts.DB != nil {
 		ts.DB.Close()
-	}
-	if ts.HTTPServer != nil {
-		ts.HTTPServer.Close()
 	}
 }
 
