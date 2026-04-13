@@ -17,11 +17,11 @@ struct event {
     u64 start_timestamp;
 };
 
-// starts map: 记录入口时间，key 为 xid
+// starts map: 记录入口时间，key 为 svc_rqst 指针
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, MAX_ENTRIES);
-    __type(key, __u32);      // xid
+    __type(key, void *);     // svc_rqst 指针
     __type(value, __u64);    // start_time
 } starts SEC(".maps");
 
@@ -35,27 +35,17 @@ struct {
 // svc_process fentry 探针 - 记录开始时间
 SEC("fentry/svc_process")
 int BPF_PROG(svc_process_entry, struct svc_rqst *rqstp) {
-    // 读取 xid
-    __u32 xid = BPF_CORE_READ(rqstp, rq_xid);
-    if (xid == 0)
-        return 0;
-
-    // 记录开始时间
+    // 记录开始时间，key 使用 rqstp 指针（此时 rq_xid 可能尚未初始化）
     __u64 ts = bpf_ktime_get_ns();
-    bpf_map_update_elem(&starts, &xid, &ts, BPF_ANY);
+    bpf_map_update_elem(&starts, &rqstp, &ts, BPF_ANY);
     return 0;
 }
 
 // svc_send fentry 探针 - 计算延迟并输出
 SEC("fentry/svc_send")
 int BPF_PROG(svc_send_entry, struct svc_rqst *rqstp) {
-    // 读取 xid
-    __u32 xid = BPF_CORE_READ(rqstp, rq_xid);
-    if (xid == 0)
-        return 0;
-
-    // 从 starts map 查找对应的开始时间
-    __u64 *start = bpf_map_lookup_elem(&starts, &xid);
+    // 从 starts map 查找对应的开始时间，key 使用 rqstp 指针
+    __u64 *start = bpf_map_lookup_elem(&starts, &rqstp);
     if (!start)
         return 0;
 
@@ -65,7 +55,8 @@ int BPF_PROG(svc_send_entry, struct svc_rqst *rqstp) {
         goto cleanup;
 
     // 填充事件
-    e->xid = xid;
+    __be32 xid_be = BPF_CORE_READ(rqstp, rq_xid);
+    e->xid = bpf_ntohl(xid_be);
     e->start_timestamp = *start;
     e->latency = bpf_ktime_get_ns() - *start;
 
@@ -73,6 +64,6 @@ int BPF_PROG(svc_send_entry, struct svc_rqst *rqstp) {
 
 cleanup:
     // 清理 starts map 中的记录
-    bpf_map_delete_elem(&starts, &xid);
+    bpf_map_delete_elem(&starts, &rqstp);
     return 0;
 }

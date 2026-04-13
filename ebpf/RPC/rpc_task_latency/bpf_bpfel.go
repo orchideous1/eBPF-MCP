@@ -15,10 +15,9 @@ import (
 
 type bpfEvent struct {
 	_              structs.HostLayout
-	Pid            uint64
+	Pid            uint32
 	Xid            uint32
 	ProcName       [16]int8
-	_              [4]byte
 	Latency        uint64
 	StartTimestamp uint64
 	Status         int32

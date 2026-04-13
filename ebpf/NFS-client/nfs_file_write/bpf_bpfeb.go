@@ -15,7 +15,8 @@ import (
 
 type bpfEvent struct {
 	_         structs.HostLayout
-	Pid       uint64
+	Pid       uint32
+	_         [4]byte
 	Lat       uint64
 	TimeStamp uint64
 	Size      uint64

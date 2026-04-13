@@ -18,7 +18,7 @@ volatile char filter_comm[TASK_COMM_LEN];
 
 // 事件结构体
 struct event {
-    u64 pid;
+    u32 pid;
     u32 xid;
     char proc_name[PROC_NAME_LEN];
     u64 latency;
@@ -92,7 +92,7 @@ int BPF_PROG(rpc_exit_task_entry, struct rpc_task *task) {
         goto cleanup;
 
     // 填充基本字段
-    event->pid = info->pid;
+    event->pid = (u32)(info->pid >> 32);
     event->start_timestamp = info->start_time;
     event->latency = bpf_ktime_get_ns() - info->start_time;
 

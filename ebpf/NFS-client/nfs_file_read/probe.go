@@ -85,7 +85,7 @@ func (p *NFSFileReadProbe) Start(ctx context.Context, db *sql.DB) error {
 
 	// 1. Setup DuckDB table and appender
 	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS nfs_file_read (
-pid UBIGINT,
+pid UINTEGER,
 lat UBIGINT,
 time_stamp UBIGINT,
 size UBIGINT,

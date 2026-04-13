@@ -185,3 +185,23 @@ func ensureDuckDBOwnership(dbPath string) error {
 
 	return nil
 }
+
+func findRepoRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for {
+		if _, statErr := os.Stat(filepath.Join(wd, "go.mod")); statErr == nil {
+			
+			return wd, nil
+		}
+
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return "", os.ErrNotExist
+		}
+		wd = parent
+	}
+}

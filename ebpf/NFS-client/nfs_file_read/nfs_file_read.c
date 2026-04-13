@@ -16,7 +16,7 @@ volatile char filter_file[FILE_NAME_LEN];
 volatile char filter_comm[TASK_COMM_LEN];
 
 struct event {
-    u64 pid;
+    u32 pid;
     u64 lat;
     u64 time_stamp;
     u64 size;
@@ -95,7 +95,7 @@ static __always_inline char *get_file_name(struct file *fp) {
 SEC("fentry/nfs_file_read")
 int BPF_PROG(nfs_file_read, struct kiocb *iocb, struct iov_iter *to) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u64 pid = pid_tgid;
+    __u64 pid = pid_tgid >> 32;
 
     if (filter_pid && filter_pid != pid)
         return 0;
@@ -128,7 +128,7 @@ int BPF_PROG(nfs_file_read_exit, struct kiocb *iocb, struct iov_iter *to, ssize_
     if (!event)
         return 0;
 
-    event->pid = pid_tgid;
+    event->pid = (u32)(pid_tgid >> 32);
     event->time_stamp = bpf_ktime_get_ns();
     event->lat = start_time ? event->time_stamp - start_time : 0;
     event->size = (u64)ret;

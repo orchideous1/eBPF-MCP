@@ -85,7 +85,7 @@ func (p *RPCTaskLatencyProbe) Start(ctx context.Context, db *sql.DB) error {
 
 	// 1. Setup DuckDB table and appender
 	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS rpc_task_latency (
-pid UBIGINT,
+pid UINTEGER,
 xid UINTEGER,
 proc_name VARCHAR,
 latency UBIGINT,

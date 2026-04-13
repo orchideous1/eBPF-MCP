@@ -26,7 +26,7 @@ probes:
       fields:
         - name: pid
           type: u32
-          description: 发起NFS读写请求的进程ID
+          description: 发起NFS读请求的进程ID
         - name: comm
           type: str
           description: 发起NFS读写请求的进程名称（最多16字符）
