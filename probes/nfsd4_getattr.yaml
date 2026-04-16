@@ -1,0 +1,33 @@
+probes:
+  - type: nfsd4_getattr
+    title: NFSD获取属性操作
+    layer: nfsd
+    level: L2
+    scene: 度量NFS服务端(nfsd)处理NFSv4 GETATTR请求的延迟
+    entrypoints:
+      - nfsd4_getattr
+    params:
+      - name: filter_pid
+        type: u32
+        description: 过滤指定PID的nfsd进程
+        optional: true
+        example: 1234
+    outputs:
+      fields:
+        - name: pid
+          type: u32
+          description: 处理请求的nfsd进程ID
+        - name: lat
+          type: u64
+          description: 请求处理延迟（纳秒）
+        - name: time_stamp
+          type: u64
+          description: 事件发生的绝对时间戳（纳秒级）
+        - name: xid
+          type: u32
+          description: RPC事务ID
+        - name: comm
+          type: str
+          description: 处理请求的进程名称（最多16字符）
+    risks: medium
+    risk-description: 高并发场景下全量追踪可能有开销，可采用filter_pid进行过滤

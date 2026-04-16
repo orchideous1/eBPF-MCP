@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"log"
+	"sync/atomic"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -38,6 +39,8 @@ type NFSd4WriteProbe struct {
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
+
+	eventCount uint64
 }
 
 func NewNFSd4WriteProbe() *NFSd4WriteProbe {
@@ -150,6 +153,7 @@ comm VARCHAR
 	}()
 
 	go p.consume(probeCtx)
+	log.Printf("[nfsd4_write] probe started")
 	return nil
 }
 
@@ -170,7 +174,7 @@ func (p *NFSd4WriteProbe) consume(ctx context.Context) {
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				log.Println("[nfsd4_write] ringbuf closed, exiting consumer")
+				// log.Println("[nfsd4_write] ringbuf closed, exiting consumer")
 				return
 			}
 			continue
@@ -186,7 +190,9 @@ func (p *NFSd4WriteProbe) consume(ctx context.Context) {
 		err = p.appender.AppendRow(event.Pid, event.Lat, event.TimeStamp, event.Size, event.Offset, event.Xid, comm)
 		if err != nil {
 			log.Printf("[nfsd4_write] appending row: %v", err)
+			continue
 		}
+		atomic.AddUint64(&p.eventCount, 1)
 
 		count++
 		if count >= 100 {
@@ -199,16 +205,16 @@ func (p *NFSd4WriteProbe) consume(ctx context.Context) {
 }
 
 func (p *NFSd4WriteProbe) Stop() error {
-	log.Println("[nfsd4_write] Stop() called, shutting down...")
+	// log.Println("[nfsd4_write] Stop() called, shutting down...")
 
 	if p.cancel != nil {
 		p.cancel()
-		log.Println("[nfsd4_write] context cancelled")
+		// log.Println("[nfsd4_write] context cancelled")
 	}
 
 	if p.done != nil {
 		<-p.done
-		log.Println("[nfsd4_write] consumer exited")
+		// log.Println("[nfsd4_write] consumer exited")
 	}
 
 	if p.appender != nil {
@@ -225,7 +231,8 @@ func (p *NFSd4WriteProbe) Stop() error {
 	if p.objs != (bpfObjects{}) {
 		_ = p.objs.Close()
 	}
-	log.Println("[nfsd4_write] Stop() completed")
+	runCount, _ := probes.SumProgramRunCount(p.objs.Nfsd4WriteEntry, p.objs.Nfsd4WriteExit)
+	log.Printf("[nfsd4_write] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 

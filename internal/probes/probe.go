@@ -3,6 +3,8 @@ package probes
 import (
 	"context"
 	"database/sql"
+
+	"github.com/cilium/ebpf"
 )
 
 // ProbeState 表示探针的状态
@@ -129,4 +131,20 @@ func (b *BaseProbe) GetTitle() string {
 func (b *BaseProbe) Flush() error {
 	// 默认实现为空，具体探针需要覆盖此方法
 	return nil
+}
+
+// SumProgramRunCount 累加多个 *ebpf.Program 的 RunCount
+func SumProgramRunCount(progs ...*ebpf.Program) (uint64, error) {
+	var total uint64
+	for _, p := range progs {
+		if p == nil {
+			continue
+		}
+		stats, err := p.Stats()
+		if err != nil {
+			return 0, err
+		}
+		total += stats.RunCount
+	}
+	return total, nil
 }

@@ -12,6 +12,11 @@ probes:
         description: 目标进程ID，用于过滤特定进程的NFS getattr事件
         optional: true
         example: 1234
+      - name: filter_file
+        type: string
+        description: 过滤指定文件名（支持通配符*和?）
+        optional: true
+        example: "*.txt"
     outputs:
       fields:
         - name: pid
@@ -29,5 +34,8 @@ probes:
         - name: ret
           type: s64
           description: NFS getattr请求的返回值（0表示成功，负数表示错误码）
+        - name: file
+          type: str
+          description: 目标文件名（最多16字符）
     risks: medium
     risk-description: 高并发 I/O 场景下全量追踪可能有开销，可采用filter_pid\filter_file\filter_comm进行进程追踪

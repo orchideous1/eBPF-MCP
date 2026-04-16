@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"sort"
 	"sync"
+
+	"github.com/cilium/ebpf"
+	"golang.org/x/sys/unix"
 
 	"ebpf-mcp/internal/logx"
 )
@@ -27,8 +31,9 @@ type Controller struct {
 	probes   map[string]Probe // 已加载的探针实例
 	statuses map[string]ProbeStatus
 
-	dbPath   string
-	dbOpener func(path string) (*sql.DB, error)
+	dbPath      string
+	dbOpener    func(path string) (*sql.DB, error)
+	statsCloser io.Closer
 }
 
 // NewController creates a controller bound to one shared database handle.
@@ -118,6 +123,15 @@ func (c *Controller) Load(ctx context.Context, name string) (Status, error) {
 	probe.SetState(StateLoaded)
 	c.probes[name] = probe
 	c.statuses[name] = probe.GetStatus()
+
+	if c.statsCloser == nil {
+		if closer, err := ebpf.EnableStats(uint32(unix.BPF_STATS_RUN_TIME)); err != nil {
+			log.Printf("[controller] failed to enable bpf stats: %v", err)
+		} else {
+			c.statsCloser = closer
+		}
+	}
+
 	st := Status{Name: name, State: "loaded", Loaded: true}
 	return st, nil
 }
@@ -147,10 +161,16 @@ func (c *Controller) Unload(name string) (Status, error) {
 	c.statuses[name] = probe.GetStatus()
 	st := Status{Name: name, State: "unloaded", Loaded: false}
 
-	// 如果已没有加载的探针，自动 checkpoint 并关闭 db（仅在启用了懒加载时）
-	if len(c.probes) == 0 && c.db != nil && c.dbOpener != nil {
-		if err := c.checkpointAndCloseDBLocked(); err != nil {
-			log.Printf("[controller] checkpointAndCloseDB on unload failed: %v", err)
+	// 如果已没有加载的探针，自动 checkpoint 并关闭 db（仅在启用了懒加载时），同时关闭 bpf stats
+	if len(c.probes) == 0 {
+		if c.statsCloser != nil {
+			_ = c.statsCloser.Close()
+			c.statsCloser = nil
+		}
+		if c.db != nil && c.dbOpener != nil {
+			if err := c.checkpointAndCloseDBLocked(); err != nil {
+				log.Printf("[controller] checkpointAndCloseDB on unload failed: %v", err)
+			}
 		}
 	}
 	return st, nil
@@ -243,6 +263,11 @@ func (c *Controller) Shutdown() error {
 		c.statuses[name] = probe.GetStatus()
 	}
 	c.probes = make(map[string]Probe)
+
+	if c.statsCloser != nil {
+		_ = c.statsCloser.Close()
+		c.statsCloser = nil
+	}
 
 	if c.db != nil && c.dbOpener != nil {
 		if err := c.checkpointAndCloseDBLocked(); err != nil {

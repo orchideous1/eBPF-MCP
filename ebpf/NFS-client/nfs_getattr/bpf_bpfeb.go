@@ -20,6 +20,7 @@ type bpfEvent struct {
 	TimeStamp uint64
 	Ret       int64
 	Comm      [32]int8
+	File      [16]int8
 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.
@@ -80,7 +81,8 @@ type bpfMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
-	FilterPid *ebpf.VariableSpec `ebpf:"filter_pid"`
+	FilterFile *ebpf.VariableSpec `ebpf:"filter_file"`
+	FilterPid  *ebpf.VariableSpec `ebpf:"filter_pid"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -118,7 +120,8 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
-	FilterPid *ebpf.Variable `ebpf:"filter_pid"`
+	FilterFile *ebpf.Variable `ebpf:"filter_file"`
+	FilterPid  *ebpf.Variable `ebpf:"filter_pid"`
 }
 
 // bpfPrograms contains all programs after they have been loaded into the kernel.

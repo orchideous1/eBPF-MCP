@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -40,6 +41,8 @@ type BlockIoLatencyProbe struct {
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
+
+	eventCount uint64
 }
 
 // NewBlockIoLatencyProbe 创建一个新的块设备I/O延迟探针实例。
@@ -160,14 +163,13 @@ func (p *BlockIoLatencyProbe) consume(ctx context.Context) {
 
 	var event bpfEvent
 	count := 0
-	totalProcessed := 0
 
 	log.Printf("[block_io_latency] consumer started, waiting for events...")
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[block_io_latency] context cancelled, exiting consumer. Total processed: %d", totalProcessed)
+			log.Printf("[block_io_latency] context cancelled, exiting consumer. Total processed: %d", atomic.LoadUint64(&p.eventCount))
 			return
 		default:
 		}
@@ -175,7 +177,7 @@ func (p *BlockIoLatencyProbe) consume(ctx context.Context) {
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				log.Printf("[block_io_latency] ringbuf closed, exiting consumer. Total processed: %d", totalProcessed)
+				log.Printf("[block_io_latency] ringbuf closed, exiting consumer. Total processed: %d", atomic.LoadUint64(&p.eventCount))
 				return
 			}
 			continue
@@ -196,10 +198,11 @@ func (p *BlockIoLatencyProbe) consume(ctx context.Context) {
 		)
 		if err != nil {
 			log.Printf("[block_io_latency] ERROR appending row (pid=%d): %v", event.Pid, err)
+			continue
 		}
+		atomic.AddUint64(&p.eventCount, 1)
 
 		count++
-		totalProcessed++
 		if count >= 100 {
 			if err := p.appender.Flush(); err != nil {
 				log.Printf("[block_io_latency] ERROR flushing appender: %v", err)
@@ -211,16 +214,16 @@ func (p *BlockIoLatencyProbe) consume(ctx context.Context) {
 
 // Stop 停止探针并释放资源。
 func (p *BlockIoLatencyProbe) Stop() error {
-	log.Printf("[block_io_latency] Stop() called, shutting down probe...")
+	// log.Printf("[block_io_latency] Stop() called, shutting down probe...")
 
 	if p.cancel != nil {
 		p.cancel()
-		log.Printf("[block_io_latency] context cancelled")
+		// log.Printf("[block_io_latency] context cancelled")
 	}
 
 	if p.done != nil {
 		<-p.done
-		log.Printf("[block_io_latency] consumer exited")
+		// log.Printf("[block_io_latency] consumer exited")
 	}
 
 	if p.appender != nil {
@@ -246,8 +249,8 @@ func (p *BlockIoLatencyProbe) Stop() error {
 		_ = p.objs.Close()
 		log.Printf("[block_io_latency] bpf objects closed")
 	}
-
-	log.Printf("[block_io_latency] Stop() completed")
+	runCount, _ := probes.SumProgramRunCount(p.objs.TraceBlockIoStart, p.objs.TraceBlockIoDone)
+	log.Printf("[block_io_latency] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"log"
+	"sync/atomic"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -37,6 +38,8 @@ type SvcRqstLatencyProbe struct {
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
+
+	eventCount uint64
 }
 
 func NewSvcRqstLatencyProbe() *SvcRqstLatencyProbe {
@@ -140,6 +143,7 @@ start_timestamp UBIGINT
 	}()
 
 	go p.consume(probeCtx)
+	log.Printf("[svc_rqst_latency] probe started")
 	return nil
 }
 
@@ -162,7 +166,7 @@ func (p *SvcRqstLatencyProbe) consume(ctx context.Context) {
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				log.Println("[svc_rqst_latency] ringbuf closed, exiting consumer")
+				// log.Println("[svc_rqst_latency] ringbuf closed, exiting consumer")
 				return
 			}
 			// 其他错误继续循环
@@ -181,7 +185,9 @@ func (p *SvcRqstLatencyProbe) consume(ctx context.Context) {
 		)
 		if err != nil {
 			log.Printf("[svc_rqst_latency] appending row: %v", err)
+			continue
 		}
+		atomic.AddUint64(&p.eventCount, 1)
 
 		count++
 		if count >= 100 {
@@ -194,18 +200,18 @@ func (p *SvcRqstLatencyProbe) consume(ctx context.Context) {
 }
 
 func (p *SvcRqstLatencyProbe) Stop() error {
-	log.Println("[svc_rqst_latency] Stop() called, shutting down...")
+	// log.Println("[svc_rqst_latency] Stop() called, shutting down...")
 
 	// 1. 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
-		log.Println("[svc_rqst_latency] context cancelled")
+		// log.Println("[svc_rqst_latency] context cancelled")
 	}
 
 	// 2. 等待 consume goroutine 真正退出
 	if p.done != nil {
 		<-p.done
-		log.Println("[svc_rqst_latency] consumer exited")
+		// log.Println("[svc_rqst_latency] consumer exited")
 	}
 
 	// 3. Flush 数据并清理资源
@@ -223,7 +229,8 @@ func (p *SvcRqstLatencyProbe) Stop() error {
 	if p.objs != (bpfObjects{}) {
 		_ = p.objs.Close()
 	}
-	log.Println("[svc_rqst_latency] Stop() completed")
+	runCount, _ := probes.SumProgramRunCount(p.objs.SvcProcessEntry, p.objs.SvcSendEntry)
+	log.Printf("[svc_rqst_latency] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 

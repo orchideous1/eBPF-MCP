@@ -1,7 +1,8 @@
 //go:build linux
 
-//go:generate go tool bpf2go -cflags "-O2" -tags linux bpf nfs_getattr.c -- -I ../../headers
-package nfsclient
+//go:generate go tool bpf2go -cflags "-O2" -tags linux bpf nfsd4_access.c -- -I ../../headers
+
+package nfsd
 
 import (
 	"bytes"
@@ -9,7 +10,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"log"
 	"sync/atomic"
 
@@ -23,12 +23,12 @@ import (
 )
 
 func init() {
-	probes.Register("nfs_getattr", func() probes.Probe {
-		return NewNFSGetattrProbe()
+	probes.Register("nfsd4_access", func() probes.Probe {
+		return NewNFSd4AccessProbe()
 	})
 }
 
-type NFSGetattrProbe struct {
+type NFSd4AccessProbe struct {
 	probes.BaseProbe
 
 	objs   bpfObjects
@@ -43,63 +43,60 @@ type NFSGetattrProbe struct {
 	eventCount uint64
 }
 
-func NewNFSGetattrProbe() *NFSGetattrProbe {
-	// 从YAML加载元数据
-	meta, exists := probes.GetProbeMetadata("nfs_getattr")
+func NewNFSd4AccessProbe() *NFSd4AccessProbe {
+	// 尝试从 YAML 加载元数据
+	meta, exists := probes.GetProbeMetadata("nfsd4_access")
 	if !exists {
-		// 如果YAML中没有，使用默认元数据
+		// 如果 YAML 中没有，使用默认元数据
 		meta = probes.ProbeMetadata{
-			Type:        "nfs_getattr",
-			Title:       "获取文件属性",
-			Layer:       "nfs-client",
+			Type:        "nfsd4_access",
+			Title:       "NFSD访问权限检查",
+			Layer:       "nfsd",
 			Level:       "L2",
-			Scene:       "度量NFS-Client侧获取文件属性请求的延迟",
-			Entrypoints: []string{"nfs_getattr"},
+			Scene:       "度量NFS服务端(nfsd)处理NFSv4访问权限检查请求的延迟",
+			Entrypoints: []string{"nfsd4_access"},
 			Params: []probes.ParamField{
-				{Name: "filter_pid", Type: "u32", Description: "过滤指定PID的进程", Optional: true},
-				{Name: "filter_file", Type: "string", Description: "过滤指定文件名（支持通配符）", Optional: true},
+				{Name: "filter_pid", Type: "u32", Description: "过滤指定PID的nfsd进程", Optional: true},
 			},
 			Outputs: probes.OutputConfig{
 				Fields: []probes.OutputField{
-					{Name: "pid", Type: "u32", Description: "进程ID"},
+					{Name: "pid", Type: "u32", Description: "处理请求的nfsd进程ID"},
 					{Name: "lat", Type: "u64", Description: "延迟(纳秒)"},
 					{Name: "time_stamp", Type: "u64", Description: "时间戳"},
-					{Name: "ret", Type: "s64", Description: "返回值"},
+					{Name: "xid", Type: "u32", Description: "RPC事务ID"},
 					{Name: "comm", Type: "string", Description: "进程名"},
-					{Name: "file", Type: "string", Description: "文件名"},
 				},
 			},
-			Risks: "高并发 I/O 场景下全量追踪可能有开销",
+			Risks: "高并发场景下全量追踪可能有开销",
 		}
 	}
-	return &NFSGetattrProbe{
+	return &NFSd4AccessProbe{
 		BaseProbe: probes.NewBaseProbe(meta),
 	}
 }
 
-func (p *NFSGetattrProbe) Name() string {
-	return "nfs_getattr"
+func (p *NFSd4AccessProbe) Name() string {
+	return "nfsd4_access"
 }
 
-func (p *NFSGetattrProbe) Start(ctx context.Context, db *sql.DB) error {
+func (p *NFSd4AccessProbe) Start(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return logx.ErrDBIsNil
 	}
 
 	// 1. Setup DuckDB table and appender
-	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS nfs_getattr (
+	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS nfsd4_access (
 pid UBIGINT,
 lat UBIGINT,
 time_stamp UBIGINT,
-ret BIGINT,
-comm VARCHAR,
-file VARCHAR
+xid UINTEGER,
+comm VARCHAR
 )`)
 	if err != nil {
 		return logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "creating table", err)
 	}
 
-	p.appender, p.dbConn, err = database.NewDuckDBAppender(ctx, db, "", "nfs_getattr")
+	p.appender, p.dbConn, err = database.NewDuckDBAppender(ctx, db, "", "nfsd4_access")
 	if err != nil {
 		p.Stop()
 		return logx.NewDomainErrorWithCause(logx.ErrorDBOperation, "creating appender", err)
@@ -113,7 +110,7 @@ file VARCHAR
 
 	// 3. Attach tracing
 	entryLink, err := link.AttachTracing(link.TracingOptions{
-		Program: p.objs.NfsGetattrEntry,
+		Program: p.objs.Nfsd4AccessEntry,
 	})
 	if err != nil {
 		p.Stop()
@@ -121,9 +118,8 @@ file VARCHAR
 	}
 	p.links = append(p.links, entryLink)
 
-	// Attach fexit program too so ringbuf events can be emitted.
 	exitLink, err := link.AttachTracing(link.TracingOptions{
-		Program: p.objs.NfsGetattrExit,
+		Program: p.objs.Nfsd4AccessExit,
 	})
 	if err != nil {
 		p.Stop()
@@ -139,12 +135,12 @@ file VARCHAR
 	}
 	p.reader = rd
 
-	// 5. Start consuming - 使用独立 context，不依赖上层 ctx
+	// 5. Start consuming
 	probeCtx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.done = make(chan struct{})
 
-	// 桥接 goroutine：context 取消时关闭 reader，打断阻塞的 Read()
+	// 桥接 goroutine：context 取消时关闭 reader
 	go func() {
 		<-probeCtx.Done()
 		if p.reader != nil {
@@ -153,47 +149,43 @@ file VARCHAR
 	}()
 
 	go p.consume(probeCtx)
-	log.Printf("[nfs_getattr] probe started")
+	log.Printf("[nfsd4_access] probe started")
 	return nil
 }
 
-func (p *NFSGetattrProbe) consume(ctx context.Context) {
+func (p *NFSd4AccessProbe) consume(ctx context.Context) {
 	defer close(p.done)
 
 	var event bpfEvent
 	count := 0
 
 	for {
-		// 检查 context 是否已取消
 		select {
 		case <-ctx.Done():
-			log.Println("[nfs_getattr] context cancelled, exiting consumer")
+			log.Println("[nfsd4_access] context cancelled, exiting consumer")
 			return
 		default:
 		}
 
-		// 阻塞读取，但会被 reader.Close() 打断
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				// log.Println("[nfs_getattr] ringbuf closed, exiting consumer")
+				log.Println("[nfsd4_access] ringbuf closed, exiting consumer")
 				return
 			}
-			// 其他错误继续循环，让 select 检查 context
 			continue
 		}
 
 		if err := binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &event); err != nil {
-			log.Printf("[nfs_getattr] parsing event: %v", err)
+			log.Printf("[nfsd4_access] parsing event: %v", err)
 			continue
 		}
 
 		comm := cStringFromInt8(event.Comm[:])
-		file := cStringFromInt8(event.File[:])
 
-		err = p.appender.AppendRow(event.Pid, event.Lat, event.TimeStamp, event.Ret, comm, file)
+		err = p.appender.AppendRow(event.Pid, event.Lat, event.TimeStamp, event.Xid, comm)
 		if err != nil {
-			log.Printf("[nfs_getattr] appending row: %v", err)
+			log.Printf("[nfsd4_access] appending row: %v", err)
 			continue
 		}
 		atomic.AddUint64(&p.eventCount, 1)
@@ -201,29 +193,26 @@ func (p *NFSGetattrProbe) consume(ctx context.Context) {
 		count++
 		if count >= 100 {
 			if err := p.appender.Flush(); err != nil {
-				log.Printf("[nfs_getattr] flushing appender: %v", err)
+				log.Printf("[nfsd4_access] flushing appender: %v", err)
 			}
 			count = 0
 		}
 	}
 }
 
-func (p *NFSGetattrProbe) Stop() error {
-	// log.Println("[nfs_getattr] Stop() called, shutting down...")
+func (p *NFSd4AccessProbe) Stop() error {
+	// log.Println("[nfsd4_access] Stop() called, shutting down...")
 
-	// 1. 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
-		// log.Println("[nfs_getattr] context cancelled")
+		// log.Println("[nfsd4_access] context cancelled")
 	}
 
-	// 2. 等待 consume goroutine 真正退出
 	if p.done != nil {
 		<-p.done
-		// log.Println("[nfs_getattr] consumer exited")
+		// log.Println("[nfsd4_access] consumer exited")
 	}
 
-	// 3. Flush 数据并清理资源
 	if p.appender != nil {
 		_ = p.appender.Flush()
 		_ = p.appender.Close()
@@ -238,24 +227,23 @@ func (p *NFSGetattrProbe) Stop() error {
 	if p.objs != (bpfObjects{}) {
 		_ = p.objs.Close()
 	}
-	runCount, _ := probes.SumProgramRunCount(p.objs.NfsGetattrEntry, p.objs.NfsGetattrExit)
-	log.Printf("[nfs_getattr] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
+	runCount, _ := probes.SumProgramRunCount(p.objs.Nfsd4AccessEntry, p.objs.Nfsd4AccessExit)
+	log.Printf("[nfsd4_access] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 
-// Flush 强制将缓冲区中的数据写入数据库
-func (p *NFSGetattrProbe) Flush() error {
+func (p *NFSd4AccessProbe) Flush() error {
 	if p.appender != nil {
 		return p.appender.Flush()
 	}
 	return nil
 }
 
-func (p *NFSGetattrProbe) Update(config map[string]interface{}) error {
+func (p *NFSd4AccessProbe) Update(config map[string]interface{}) error {
 	if config == nil {
 		return nil
 	}
-	if p.objs.FilterPid == nil || p.objs.FilterFile == nil {
+	if p.objs.FilterPid == nil {
 		return logx.ErrProbeNotStarted
 	}
 
@@ -266,19 +254,6 @@ func (p *NFSGetattrProbe) Update(config map[string]interface{}) error {
 		}
 		if err := p.objs.FilterPid.Set(pid); err != nil {
 			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_pid", err)
-		}
-	}
-
-	if raw, ok := config["filter_file"]; ok {
-		s, ok := raw.(string)
-		if !ok {
-			return logx.NewDomainErrorWithCause(logx.ErrorInvalidArgument, fmt.Sprintf("invalid filter_file: expected string, got %T", raw), nil)
-		}
-		// 将字符串复制到固定大小的字节数组
-		var fileBytes [16]byte
-		copy(fileBytes[:], s)
-		if err := p.objs.FilterFile.Set(fileBytes); err != nil {
-			return logx.NewDomainErrorWithCause(logx.ErrorProbeUpdateFailed, "set filter_file", err)
 		}
 	}
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -37,6 +38,8 @@ type NFSFileReadProbe struct {
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
+
+	eventCount uint64
 }
 
 func NewNFSFileReadProbe() *NFSFileReadProbe {
@@ -150,6 +153,7 @@ file VARCHAR
 	}()
 
 	go p.consume(probeCtx)
+	log.Printf("[nfs_file_read] probe started")
 	return nil
 }
 
@@ -172,7 +176,7 @@ func (p *NFSFileReadProbe) consume(ctx context.Context) {
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				log.Println("[nfs_file_read] ringbuf closed, exiting consumer")
+				// log.Println("[nfs_file_read] ringbuf closed, exiting consumer")
 				return
 			}
 			// 其他错误继续循环，让 select 检查 context
@@ -190,7 +194,9 @@ func (p *NFSFileReadProbe) consume(ctx context.Context) {
 		err = p.appender.AppendRow(event.Pid, event.Lat, event.TimeStamp, event.Size, comm, file)
 		if err != nil {
 			log.Printf("[nfs_file_read] appending row: %v", err)
+			continue
 		}
+		atomic.AddUint64(&p.eventCount, 1)
 
 		count++
 		if count >= 100 {
@@ -203,18 +209,18 @@ func (p *NFSFileReadProbe) consume(ctx context.Context) {
 }
 
 func (p *NFSFileReadProbe) Stop() error {
-	log.Println("[nfs_file_read] Stop() called, shutting down...")
+	// log.Println("[nfs_file_read] Stop() called, shutting down...")
 
 	// 1. 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
-		log.Println("[nfs_file_read] context cancelled")
+		// log.Println("[nfs_file_read] context cancelled")
 	}
 
 	// 2. 等待 consume goroutine 真正退出
 	if p.done != nil {
 		<-p.done
-		log.Println("[nfs_file_read] consumer exited")
+		// log.Println("[nfs_file_read] consumer exited")
 	}
 
 	// 3. Flush 数据并清理资源
@@ -232,7 +238,8 @@ func (p *NFSFileReadProbe) Stop() error {
 	if p.objs != (bpfObjects{}) {
 		_ = p.objs.Close()
 	}
-	log.Println("[nfs_file_read] Stop() completed")
+	runCount, _ := probes.SumProgramRunCount(p.objs.NfsFileRead, p.objs.NfsFileReadExit)
+	log.Printf("[nfs_file_read] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 

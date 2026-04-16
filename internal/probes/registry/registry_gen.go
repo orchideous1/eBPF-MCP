@@ -13,6 +13,8 @@ import (
 	_ "ebpf-mcp/ebpf/RPC/rpc_task_latency"
 	_ "ebpf-mcp/ebpf/SVC/svc_rqst_latency"
 	_ "ebpf-mcp/ebpf/Sys-call/sys_call_trace"
+	_ "ebpf-mcp/ebpf/nfsd/nfsd4_access"
+	_ "ebpf-mcp/ebpf/nfsd/nfsd4_getattr"
 	_ "ebpf-mcp/ebpf/nfsd/nfsd4_read"
 	_ "ebpf-mcp/ebpf/nfsd/nfsd4_write"
 )

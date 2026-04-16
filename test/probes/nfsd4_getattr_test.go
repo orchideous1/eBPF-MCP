@@ -9,35 +9,34 @@ import (
 	"testing"
 	"time"
 
-	_ "ebpf-mcp/ebpf/NFS-client/nfs_getattr"
+	_ "ebpf-mcp/ebpf/nfsd/nfsd4_getattr"
 	"ebpf-mcp/internal/logx"
 	"ebpf-mcp/internal/probes"
 )
 
-// TestNFSGetattrProbe_Registration 测试探针注册
-func TestNFSGetattrProbe_Registration(t *testing.T) {
-	if !probes.HasProbe("nfs_getattr") {
-		t.Fatal("nfs_getattr probe should be registered")
+// TestNFSd4GetattrProbe_Registration 测试探针注册
+func TestNFSd4GetattrProbe_Registration(t *testing.T) {
+	if !probes.HasProbe("nfsd4_getattr") {
+		t.Fatal("nfsd4_getattr probe should be registered")
 	}
 
-	probe, ok := probes.GetProbe("nfs_getattr")
+	probe, ok := probes.GetProbe("nfsd4_getattr")
 	if !ok {
 		t.Fatal("should get probe from registry")
 	}
 
-	if probe.Name() != "nfs_getattr" {
-		t.Fatalf("expected name 'nfs_getattr', got '%s'", probe.Name())
+	if probe.Name() != "nfsd4_getattr" {
+		t.Fatalf("expected name 'nfsd4_getattr', got '%s'", probe.Name())
 	}
 
 	meta := probe.GetMetadata()
-	if meta.Type != "nfs_getattr" {
-		t.Fatalf("expected Type 'nfs_getattr', got '%s'", meta.Type)
+	if meta.Type != "nfsd4_getattr" {
+		t.Fatalf("expected Type 'nfsd4_getattr', got '%s'", meta.Type)
 	}
-	if meta.Layer != "nfs-client" {
-		t.Fatalf("expected Layer 'nfs-client', got '%s'", meta.Layer)
+	if meta.Layer != "nfsd" {
+		t.Fatalf("expected Layer 'nfsd', got '%s'", meta.Layer)
 	}
 
-	// 验证参数定义
 	if len(meta.Params) < 1 {
 		t.Fatalf("expected at least 1 param, got %d", len(meta.Params))
 	}
@@ -51,7 +50,6 @@ func TestNFSGetattrProbe_Registration(t *testing.T) {
 		t.Error("expected param 'filter_pid' not found")
 	}
 
-	// 验证输出字段
 	if len(meta.Outputs.Fields) == 0 {
 		t.Fatal("metadata Outputs.Fields should not be empty")
 	}
@@ -61,20 +59,16 @@ func TestNFSGetattrProbe_Registration(t *testing.T) {
 		outputNames[field.Name] = true
 	}
 
-	expectedOutputs := []string{"pid", "comm", "time_stamp", "lat", "ret", "file"}
+	expectedOutputs := []string{"pid", "comm", "time_stamp", "lat", "xid"}
 	for _, name := range expectedOutputs {
 		if !outputNames[name] {
 			t.Errorf("expected output field '%s' not found", name)
 		}
 	}
-
-	if !paramNames["filter_file"] {
-		t.Error("expected param 'filter_file' not found")
-	}
 }
 
-// TestNFSGetattrProbe_ControllerLifecycle 测试 Controller 生命周期管理
-func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
+// TestNFSd4GetattrProbe_ControllerLifecycle 测试 Controller 生命周期管理
+func TestNFSd4GetattrProbe_ControllerLifecycle(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("需要 root 权限运行 eBPF 测试")
 	}
@@ -90,7 +84,7 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 
 	// 1. 测试加载探针
 	t.Log("Step 1: 加载探针")
-	status, err := controller.Load(ctx, "nfs_getattr")
+	status, err := controller.Load(ctx, "nfsd4_getattr")
 	if err != nil {
 		t.Fatalf("failed to load probe: %v", err)
 	}
@@ -100,14 +94,14 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 
 	// 2. 测试重复加载（应该失败）
 	t.Log("Step 2: 验证重复加载返回错误")
-	_, err = controller.Load(ctx, "nfs_getattr")
+	_, err = controller.Load(ctx, "nfsd4_getattr")
 	if !errors.Is(err, logx.ErrProbeAlreadyLoaded) {
 		t.Fatalf("expected ErrProbeAlreadyLoaded, got: %v", err)
 	}
 
 	// 3. 测试查询状态
 	t.Log("Step 3: 查询探针状态")
-	status, err = controller.Status("nfs_getattr")
+	status, err = controller.Status("nfsd4_getattr")
 	if err != nil {
 		t.Fatalf("failed to get status: %v", err)
 	}
@@ -117,7 +111,7 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 
 	// 4. 测试更新配置
 	t.Log("Step 4: 更新宏变量配置")
-	status, err = controller.Update("nfs_getattr", map[string]any{
+	status, err = controller.Update("nfsd4_getattr", map[string]any{
 		"filter_pid": uint32(1234),
 	})
 	if err != nil {
@@ -129,7 +123,7 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 
 	// 5. 测试卸载探针
 	t.Log("Step 5: 卸载探针")
-	status, err = controller.Unload("nfs_getattr")
+	status, err = controller.Unload("nfsd4_getattr")
 	if err != nil {
 		t.Fatalf("failed to unload probe: %v", err)
 	}
@@ -139,14 +133,14 @@ func TestNFSGetattrProbe_ControllerLifecycle(t *testing.T) {
 
 	// 6. 测试重复卸载（应该失败）
 	t.Log("Step 6: 验证重复卸载返回错误")
-	_, err = controller.Unload("nfs_getattr")
+	_, err = controller.Unload("nfsd4_getattr")
 	if !errors.Is(err, logx.ErrProbeNotLoaded) {
 		t.Fatalf("expected ErrProbeNotLoaded, got: %v", err)
 	}
 }
 
-// TestNFSGetattrProbe_FilterByPID 测试 PID 过滤功能
-func TestNFSGetattrProbe_FilterByPID(t *testing.T) {
+// TestNFSd4GetattrProbe_FilterByPID 测试 PID 过滤功能
+func TestNFSd4GetattrProbe_FilterByPID(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("需要 root 权限运行 eBPF 测试")
 	}
@@ -162,16 +156,16 @@ func TestNFSGetattrProbe_FilterByPID(t *testing.T) {
 
 	// 加载探针
 	t.Log("加载探针...")
-	_, err = controller.Load(ctx, "nfs_getattr")
+	_, err = controller.Load(ctx, "nfsd4_getattr")
 	if err != nil {
 		t.Fatalf("failed to load probe: %v", err)
 	}
-	defer controller.Unload("nfs_getattr")
+	defer controller.Unload("nfsd4_getattr")
 
 	// 设置 filter_pid 为当前进程 PID
 	currentPID := uint32(os.Getpid())
 	t.Logf("设置 filter_pid = %d (当前进程)", currentPID)
-	_, err = controller.Update("nfs_getattr", map[string]any{
+	_, err = controller.Update("nfsd4_getattr", map[string]any{
 		"filter_pid": currentPID,
 	})
 	if err != nil {
@@ -184,8 +178,8 @@ func TestNFSGetattrProbe_FilterByPID(t *testing.T) {
 	t.Log("PID 过滤测试完成")
 }
 
-// TestNFSGetattrProbe_MacroVariables 测试宏变量更新
-func TestNFSGetattrProbe_MacroVariables(t *testing.T) {
+// TestNFSd4GetattrProbe_MacroVariables 测试宏变量更新
+func TestNFSd4GetattrProbe_MacroVariables(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("需要 root 权限运行 eBPF 测试")
 	}
@@ -200,14 +194,14 @@ func TestNFSGetattrProbe_MacroVariables(t *testing.T) {
 	ctx := context.Background()
 
 	// 加载探针
-	_, err = controller.Load(ctx, "nfs_getattr")
+	_, err = controller.Load(ctx, "nfsd4_getattr")
 	if err != nil {
 		t.Fatalf("failed to load probe: %v", err)
 	}
-	defer controller.Unload("nfs_getattr")
+	defer controller.Unload("nfsd4_getattr")
 
 	// 测试更新 filter_pid
-	status, err := controller.Update("nfs_getattr", map[string]any{
+	status, err := controller.Update("nfsd4_getattr", map[string]any{
 		"filter_pid": uint32(1234),
 	})
 	if err != nil {
@@ -219,7 +213,7 @@ func TestNFSGetattrProbe_MacroVariables(t *testing.T) {
 
 	// 测试无效参数
 	t.Log("测试无效参数类型...")
-	_, err = controller.Update("nfs_getattr", map[string]any{
+	_, err = controller.Update("nfsd4_getattr", map[string]any{
 		"filter_pid": "invalid_string",
 	})
 	if err == nil {
@@ -228,9 +222,9 @@ func TestNFSGetattrProbe_MacroVariables(t *testing.T) {
 	t.Logf("无效参数正确返回错误: %v", err)
 }
 
-// TestNFSGetattrProbe_MetadataIntegrity 测试元数据完整性
-func TestNFSGetattrProbe_MetadataIntegrity(t *testing.T) {
-	probe, ok := probes.GetProbe("nfs_getattr")
+// TestNFSd4GetattrProbe_MetadataIntegrity 测试元数据完整性
+func TestNFSd4GetattrProbe_MetadataIntegrity(t *testing.T) {
+	probe, ok := probes.GetProbe("nfsd4_getattr")
 	if !ok {
 		t.Fatal("should get probe from registry")
 	}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -38,6 +39,8 @@ type RPCTaskLatencyProbe struct {
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
+
+	eventCount uint64
 }
 
 func NewRPCTaskLatencyProbe() *RPCTaskLatencyProbe {
@@ -150,6 +153,7 @@ status INTEGER
 	}()
 
 	go p.consume(probeCtx)
+	log.Printf("[rpc_task_latency] probe started")
 	return nil
 }
 
@@ -172,7 +176,7 @@ func (p *RPCTaskLatencyProbe) consume(ctx context.Context) {
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				log.Println("[rpc_task_latency] ringbuf closed, exiting consumer")
+				// log.Println("[rpc_task_latency] ringbuf closed, exiting consumer")
 				return
 			}
 			// 其他错误继续循环
@@ -196,7 +200,9 @@ func (p *RPCTaskLatencyProbe) consume(ctx context.Context) {
 		)
 		if err != nil {
 			log.Printf("[rpc_task_latency] appending row: %v", err)
+			continue
 		}
+		atomic.AddUint64(&p.eventCount, 1)
 
 		count++
 		if count >= 100 {
@@ -209,18 +215,18 @@ func (p *RPCTaskLatencyProbe) consume(ctx context.Context) {
 }
 
 func (p *RPCTaskLatencyProbe) Stop() error {
-	log.Println("[rpc_task_latency] Stop() called, shutting down...")
+	// log.Println("[rpc_task_latency] Stop() called, shutting down...")
 
 	// 1. 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
-		log.Println("[rpc_task_latency] context cancelled")
+		// log.Println("[rpc_task_latency] context cancelled")
 	}
 
 	// 2. 等待 consume goroutine 真正退出
 	if p.done != nil {
 		<-p.done
-		log.Println("[rpc_task_latency] consumer exited")
+		// log.Println("[rpc_task_latency] consumer exited")
 	}
 
 	// 3. Flush 数据并清理资源
@@ -238,7 +244,8 @@ func (p *RPCTaskLatencyProbe) Stop() error {
 	if p.objs != (bpfObjects{}) {
 		_ = p.objs.Close()
 	}
-	log.Println("[rpc_task_latency] Stop() completed")
+	runCount, _ := probes.SumProgramRunCount(p.objs.RpcExecuteEntry, p.objs.RpcExitTaskEntry)
+	log.Printf("[rpc_task_latency] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 

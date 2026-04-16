@@ -7,11 +7,13 @@
 #define MAX_ENTRIES  8 // num of cpu
 #define MAX_BUFF_ENTRIES 1 << 12
 #define TASK_COMM_LEN 32
+#define FILE_NAME_LEN 16
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
 // 过滤参数
 volatile __u64 filter_pid;
+volatile char filter_file[FILE_NAME_LEN];
 
 // 事件结构体
 struct event {
@@ -20,6 +22,7 @@ struct event {
     u64 time_stamp;
     s64 ret;
     char comm[TASK_COMM_LEN];
+    char file[FILE_NAME_LEN];
 };
 
 // 用于存储开始时间的 map
@@ -73,6 +76,29 @@ int BPF_PROG(nfs_getattr_exit, struct user_namespace *mnt_userns, struct dentry 
     event->lat = event->time_stamp - *start_time_ptr;
     event->ret = (s64)ret;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
+
+    // 从 dentry 读取文件名
+    if (dentry) {
+        const __u8 *file_name = BPF_CORE_READ(dentry, d_name.name);
+        if (file_name)
+            bpf_probe_read_kernel_str(&event->file, sizeof(event->file), (char *)file_name);
+        else
+            event->file[0] = '\0';
+    } else {
+        event->file[0] = '\0';
+    }
+
+    // 检查 filter_file 过滤条件（精确匹配）
+    if (filter_file[0] != '\0') {
+        for (int i = 0; i < FILE_NAME_LEN; i++) {
+            if (event->file[i] != filter_file[i]) {
+                bpf_ringbuf_discard(event, 0);
+                goto cleanup;
+            }
+            if (event->file[i] == '\0' || filter_file[i] == '\0')
+                break;
+        }
+    }
 
     bpf_ringbuf_submit(event, 0);
 

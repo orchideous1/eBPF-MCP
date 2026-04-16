@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -40,6 +41,8 @@ type SysCallTraceProbe struct {
 
 	dbConn   *sql.Conn
 	appender *duckdb.Appender
+
+	eventCount uint64
 }
 
 // NewSysCallTraceProbe 创建一个新的系统调用追踪探针实例。
@@ -162,7 +165,6 @@ func (p *SysCallTraceProbe) consume(ctx context.Context) {
 
 	var event bpfEvent
 	count := 0
-	totalProcessed := 0
 
 	log.Printf("[sys_call_trace] consumer started, waiting for events...")
 
@@ -170,7 +172,7 @@ func (p *SysCallTraceProbe) consume(ctx context.Context) {
 		// 检查 context 是否已取消
 		select {
 		case <-ctx.Done():
-			log.Printf("[sys_call_trace] context cancelled, exiting consumer. Total processed: %d", totalProcessed)
+			log.Printf("[sys_call_trace] context cancelled, exiting consumer. Total processed: %d", atomic.LoadUint64(&p.eventCount))
 			return
 		default:
 		}
@@ -180,7 +182,7 @@ func (p *SysCallTraceProbe) consume(ctx context.Context) {
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				// 正常退出路径，由 context 取消触发 reader.Close()
-				log.Printf("[sys_call_trace] ringbuf closed, exiting consumer. Total processed: %d", totalProcessed)
+				log.Printf("[sys_call_trace] ringbuf closed, exiting consumer. Total processed: %d", atomic.LoadUint64(&p.eventCount))
 				return
 			}
 			// 其他错误继续循环，让 select 检查 context
@@ -204,10 +206,11 @@ func (p *SysCallTraceProbe) consume(ctx context.Context) {
 		)
 		if err != nil {
 			log.Printf("[sys_call_trace] ERROR appending row (pid=%d, syscall=%d): %v", event.Pid, event.SyscallId, err)
+			continue
 		}
+		atomic.AddUint64(&p.eventCount, 1)
 
 		count++
-		totalProcessed++
 		if count >= 100 {
 			if err := p.appender.Flush(); err != nil {
 				log.Printf("[sys_call_trace] ERROR flushing appender: %v", err)
@@ -219,19 +222,19 @@ func (p *SysCallTraceProbe) consume(ctx context.Context) {
 
 // Stop 停止探针并释放资源。
 func (p *SysCallTraceProbe) Stop() error {
-	log.Printf("[sys_call_trace] Stop() called, shutting down probe...")
+	// log.Printf("[sys_call_trace] Stop() called, shutting down probe...")
 
 	// 步骤 1: 取消 context，触发 reader.Close() 和 consume 退出
 	if p.cancel != nil {
 		p.cancel()
-		log.Printf("[sys_call_trace] context cancelled")
+		// log.Printf("[sys_call_trace] context cancelled")
 	}
 
 	// 步骤 2: 等待 consume goroutine 真正退出
 	// context 取消会触发桥接 goroutine 调用 reader.Close()，打断阻塞的 Read()
 	if p.done != nil {
 		<-p.done
-		log.Printf("[sys_call_trace] consumer exited")
+		// log.Printf("[sys_call_trace] consumer exited")
 	}
 
 	// 步骤 3: Flush 数据到数据库
@@ -257,7 +260,8 @@ func (p *SysCallTraceProbe) Stop() error {
 		_ = p.objs.Close()
 		log.Printf("[sys_call_trace] bpf objects closed")
 	}
-	log.Printf("[sys_call_trace] Stop() completed")
+	runCount, _ := probes.SumProgramRunCount(p.objs.TraceSysEnter, p.objs.TraceSysExit)
+	log.Printf("[sys_call_trace] Stop() completed, total triggers: %d, total writes: %d", runCount, atomic.LoadUint64(&p.eventCount))
 	return nil
 }
 
