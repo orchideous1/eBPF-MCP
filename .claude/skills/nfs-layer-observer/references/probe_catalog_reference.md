@@ -100,6 +100,7 @@
 |--------|--------|------|---------|
 | `nfsd4_read` | `nfsd4_read` | 服务端 NFSv4 读 | pid, comm, time_stamp, lat, size, offset, xid |
 | `nfsd4_write` | `nfsd4_write` | 服务端 NFSv4 写 | pid, comm, time_stamp, lat, size, offset, xid |
+| `nfsd4_access` | `nfsd4_access` | 服务端 NFSv4 访问权限检查 | pid, comm, time_stamp, lat, xid |
 
 ### 2.2 未实现的探针
 
@@ -111,7 +112,6 @@
 | `nfsd4_setattr` | 设置属性 | 批量 setattr 慢 |
 | `nfsd4_lookup` | 路径查找 | 服务端 lookup 瓶颈 |
 | `nfsd4_readdir` | 读取目录 | ls 大目录慢 |
-| `nfsd4_access` | 访问权限检查 | 权限检查开销高 |
 
 #### 会话管理（`session_mgmt`）
 
@@ -169,7 +169,6 @@
 
 | 函数名 | 语义 |
 |--------|------|
-| `nfsd4_access` | 访问权限检查 |
 | `nfsd4_close` | 关闭文件 |
 | `nfsd4_commit` | 提交已写数据（稳定化） |
 | `nfsd4_create` | 创建文件/目录 |
